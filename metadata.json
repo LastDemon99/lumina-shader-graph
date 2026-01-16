@@ -1,0 +1,5 @@
+{
+  "name": "Lumina Shader Graph",
+  "description": "A visual node-based shader editor similar to Unity Shader Graph. Create real-time WebGL shaders by connecting nodes visually. Powered by Gemini for smart node generation.",
+  "requestFramePermissions": []
+}
