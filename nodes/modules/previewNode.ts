@@ -1,7 +1,21 @@
-import { NODE_DEFINITIONS } from '../../constants';
 import type { NodeModule } from '../types';
 
 export const previewNode: NodeModule = {
   type: 'preview',
-  definition: NODE_DEFINITIONS.preview,
+  definition: {
+    type: 'preview',
+    label: 'Preview',
+    inputs: [{ id: 'in', label: 'In', type: 'vec3' }],
+    outputs: [{ id: 'out', label: 'Out', type: 'vec3' }],
+  },
+  ui: { sections: [] },
+  glsl: {
+    emit: ctx => {
+      const i = ctx.getInput(ctx.id, 'in', 'vec3(0.0)', 'vec3');
+      const v = ctx.varName(ctx.id);
+      ctx.body.push(`vec3 ${v} = ${i};`);
+      ctx.variables[`${ctx.id}_out`] = { name: v, type: 'vec3' };
+      return true;
+    },
+  },
 };

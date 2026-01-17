@@ -106,6 +106,25 @@ Cuando un input numérico se renderiza para un socket desconectado, **NO** debe 
 ### Optimización de Inputs de Color (Throttling)
 Los inputs de tipo `color` nativos disparan eventos `onChange` en cada frame. Usar `ThrottledColorInput`.
 
+---
+
+## 7. UI basada en módulos (obligatorio)
+
+La UI de cada nodo debe declararse en su módulo (`nodes/modules/*.ts`) dentro de `NodeModule.ui`.
+
+### Reglas
+1. **No hardcode por `type` en la UI global** (`App.tsx` / `Node.tsx`).
+    - La UI debe renderizarse desde la definición del módulo (secciones/controles).
+2. **Socket rules / sockets efectivos**
+    - La visibilidad/habilitación de sockets depende de reglas (`socketRules`).
+    - La UI debe basarse en sockets efectivos (p.ej. `getEffectiveSockets`) para:
+      - no renderizar sockets ocultos
+      - deshabilitar interacción cuando el socket está deshabilitado
+3. **maxConnections end-to-end**
+    - El UI de conexión debe respetar `maxConnections`.
+    - El linter debe reportar violaciones.
+    - La sanitización de IA debe capear conexiones excedentes.
+
 ### Inputs Vectoriales (Vec2, Vec3, Vec4) - **¡CRÍTICO!**
 Los vectores suelen romperse visualmente. Seguir esta estructura al pie de la letra:
 
@@ -126,3 +145,7 @@ Los vectores suelen romperse visualmente. Seguir esta estructura al pie de la le
 
 1. **Truncamiento de Archivos:** Al generar código con IA, asegurar siempre que el archivo `Node.tsx` se genere completo.
 2. **Key Props:** En listas `.map()`, usar IDs únicos (`socket.id`).
+
+3. **Nodos desconocidos:** Si llega un nodo con `type` sin módulo:
+    - Renderizarlo como placeholder (label = type) y mostrar aviso.
+    - No intentar “resolverlo” con tablas legacy.

@@ -1,9 +1,13 @@
-import { NODE_DEFINITIONS } from '../../constants';
 import type { NodeModule } from '../types';
 
 export const samplerStateNode: NodeModule = {
   type: 'samplerState',
-  definition: NODE_DEFINITIONS.samplerState,
+  definition: {
+    type: 'samplerState',
+    label: 'Sampler State',
+    inputs: [],
+    outputs: [{ id: 'out', label: 'Out', type: 'samplerState' }],
+  },
   ui: {
     sections: [
       {
@@ -44,4 +48,11 @@ export const samplerStateNode: NodeModule = {
     samplerFilter: 'Linear',
     samplerWrap: 'Repeat',
   }),
+  glsl: {
+    emit: ctx => {
+      // Sampler state is currently not modeled in GLSL; downstream texture nodes ignore it.
+      ctx.variables[`${ctx.id}_out`] = { name: '0', type: 'samplerState' };
+      return true;
+    },
+  },
 };

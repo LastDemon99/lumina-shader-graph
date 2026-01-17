@@ -1,9 +1,13 @@
-import { NODE_DEFINITIONS } from '../../constants';
 import type { NodeModule } from '../types';
 
 export const textureAssetNode: NodeModule = {
   type: 'textureAsset',
-  definition: NODE_DEFINITIONS.textureAsset,
+  definition: {
+    type: 'textureAsset',
+    label: 'Texture Asset',
+    inputs: [],
+    outputs: [{ id: 'out', label: 'Out', type: 'texture' }],
+  },
   ui: {
     sections: [
       {
@@ -23,4 +27,10 @@ export const textureAssetNode: NodeModule = {
   initialData: () => ({
     textureAsset: undefined,
   }),
+  glsl: {
+    emit: () => {
+      // Source node only; samplers are declared/used by texture sampling nodes.
+      return true;
+    },
+  },
 };

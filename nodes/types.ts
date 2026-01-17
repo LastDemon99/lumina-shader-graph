@@ -109,6 +109,8 @@ export interface GeneratorContext {
 export interface NodeGlslEmitContext {
   id: string;
   node: ShaderNode;
+  nodes: ShaderNode[];
+  connections: Connection[];
   mode: 'fragment' | 'vertex';
   body: string[];
   uniforms: Set<string>;
@@ -116,6 +118,8 @@ export interface NodeGlslEmitContext {
   variables: Record<string, { name: string; type: SocketType }>; 
   getInput: (nodeId: string, socketId: string, defaultVal: string, expectedType: SocketType) => string;
   getDynamicType?: (inputSocketIds: string[]) => SocketType;
+  getTextureUniformName?: (nodeId: string) => string;
+  getTextureDimUniformName?: (nodeId: string) => string;
   varName: (nodeId: string, suffix?: string) => string;
   castTo: (varName: string, from: string, to: string) => string;
   toGLSL: (val: any, type: SocketType, mode?: 'fragment' | 'vertex') => string;

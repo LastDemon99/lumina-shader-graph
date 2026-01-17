@@ -1,10 +1,14 @@
-import { NODE_DEFINITIONS } from '../../constants';
 import type { NodeModule } from '../types';
 import type { GradientStop } from '../../types';
 
 export const gradientNode: NodeModule = {
   type: 'gradient',
-  definition: NODE_DEFINITIONS.gradient,
+  definition: {
+    type: 'gradient',
+    label: 'Gradient',
+    inputs: [],
+    outputs: [{ id: 'out', label: 'Out', type: 'gradient' }],
+  },
   ui: {
     width: 'wide',
     sections: [
@@ -27,4 +31,10 @@ export const gradientNode: NodeModule = {
       { id: '2', t: 1, color: '#ffffff' },
     ] satisfies GradientStop[],
   }),
+  glsl: {
+    emit: () => {
+      // Data container only; sampled by `sampleGradient` via graph connection lookup.
+      return true;
+    },
+  },
 };

@@ -8,11 +8,23 @@ import { generateFragmentShader, generateVertexShader } from './services/glslGen
 import { geminiService } from './services/geminiService';
 import { lintGraph } from './services/linter';
 import { ShaderNode, Connection, Viewport, NodeType, SocketType } from './types';
-import { INITIAL_NODES, NODE_DEFINITIONS, INITIAL_CONNECTIONS } from './constants';
-import { NODE_REGISTRY, getNodeModule } from './nodes';
+import { INITIAL_NODES, INITIAL_CONNECTIONS } from './initialGraph';
+import { NODE_LIST, getNodeModule } from './nodes';
+import { getEffectiveSockets } from './nodes/runtime';
 import { Wand2, Download, Upload, ZoomIn, ZoomOut, MousePointer2, Box, Square, Save, Layers, Network, CheckCircle2, Loader2, Sparkles, FileJson, AlertCircle, Plus } from 'lucide-react';
 
 const App: React.FC = () => {
+  const getDefinitionOrPlaceholder = useCallback((type: string) => {
+    return (
+      getNodeModule(type)?.definition ?? {
+        type,
+        label: type,
+        inputs: [],
+        outputs: [],
+      }
+    );
+  }, []);
+
   // --- Global State ---
   const [activeTab, setActiveTab] = useState<'graph' | 'scene'>('graph');
 
@@ -535,11 +547,19 @@ const App: React.FC = () => {
     setConnecting({ nodeId, socketId, isInput, type, x: e.clientX, y: e.clientY });
   };
 
-  const getMaxConnectionsForInput = (targetNodeId: string, targetSocketId: string): number => {
-      const targetNode = nodes.find(n => n.id === targetNodeId);
-      if (!targetNode) return 1;
-      const rule = getNodeModule(targetNode.type)?.socketRules?.inputs?.[targetSocketId];
-      return rule?.maxConnections ?? 1;
+  const getMaxConnectionsForSocket = (
+    nodeId: string,
+    socketId: string,
+    direction: 'input' | 'output',
+  ): number => {
+    const node = nodes.find(n => n.id === nodeId);
+    if (!node) return direction === 'input' ? 1 : Number.POSITIVE_INFINITY;
+
+    const mod = getNodeModule(node.type);
+    const sockets = direction === 'input' ? node.inputs : node.outputs;
+    const effective = getEffectiveSockets(node, sockets, direction, connections, mod?.socketRules);
+    const socket = effective.find(s => s.id === socketId);
+    return socket?.maxConnections ?? (direction === 'input' ? 1 : Number.POSITIVE_INFINITY);
   };
 
   const isTypeCompatible = (sourceType: SocketType, targetType: SocketType) => {
@@ -568,11 +588,39 @@ const App: React.FC = () => {
       };
 
       setConnections(prev => {
-        const maxConnections = getMaxConnectionsForInput(target.nodeId, target.socketId);
-        const filtered = maxConnections === 1
-          ? prev.filter(c => c.targetNodeId !== target.nodeId || c.targetSocketId !== target.socketId)
-          : prev;
-        return [...filtered, newConnection];
+        if (prev.some(c =>
+          c.sourceNodeId === newConnection.sourceNodeId &&
+          c.sourceSocketId === newConnection.sourceSocketId &&
+          c.targetNodeId === newConnection.targetNodeId &&
+          c.targetSocketId === newConnection.targetSocketId
+        )) {
+          return prev;
+        }
+
+        const targetMax = getMaxConnectionsForSocket(target.nodeId, target.socketId, 'input');
+        const sourceMax = getMaxConnectionsForSocket(source.nodeId, source.socketId, 'output');
+
+        let next = prev;
+
+        if (Number.isFinite(targetMax)) {
+          const targetCount = next.filter(c => c.targetNodeId === target.nodeId && c.targetSocketId === target.socketId).length;
+          if (targetMax === 1) {
+            next = next.filter(c => c.targetNodeId !== target.nodeId || c.targetSocketId !== target.socketId);
+          } else if (targetCount >= targetMax) {
+            return prev;
+          }
+        }
+
+        if (Number.isFinite(sourceMax)) {
+          const sourceCount = next.filter(c => c.sourceNodeId === source.nodeId && c.sourceSocketId === source.socketId).length;
+          if (sourceMax === 1) {
+            next = next.filter(c => c.sourceNodeId !== source.nodeId || c.sourceSocketId !== source.socketId);
+          } else if (sourceCount >= sourceMax) {
+            return prev;
+          }
+        }
+
+        return [...next, newConnection];
       });
     }
     setConnecting(null);
@@ -589,7 +637,7 @@ const App: React.FC = () => {
 
   const addNode = (type: NodeType, clientX?: number, clientY?: number) => {
     const mod = getNodeModule(type);
-    const def = (mod?.definition ?? NODE_DEFINITIONS[type]) as any;
+    const def = getDefinitionOrPlaceholder(type);
     const id = `${type}-${Date.now()}`;
     
     // Determine position: Mouse Pos or Center Screen
@@ -653,7 +701,7 @@ const App: React.FC = () => {
         return;
     }
         const draftNodes: ShaderNode[] = draft.nodes.map((n: any) => ({
-          ...(getNodeModule(n.type)?.definition ?? NODE_DEFINITIONS[n.type as NodeType]),
+          ...getDefinitionOrPlaceholder(n.type),
          id: n.id,
          x: n.x,
          y: n.y,
@@ -667,7 +715,7 @@ const App: React.FC = () => {
     const refined = await geminiService.refineGraph(draft, logs);
     if (refined && refined.nodes) {
            const newNodes: ShaderNode[] = refined.nodes.map((n: any) => ({
-             ...(getNodeModule(n.type)?.definition ?? NODE_DEFINITIONS[n.type as NodeType]),
+             ...getDefinitionOrPlaceholder(n.type),
              id: n.id,
              x: n.x,
              y: n.y,
@@ -712,9 +760,9 @@ const App: React.FC = () => {
     return <path d={path} stroke="#fff" strokeWidth="3" fill="none" strokeDasharray="5,5" className="pointer-events-none" />;
   };
 
-    const allNodeKeys = Array.from(new Set([...Object.keys(NODE_DEFINITIONS), ...Object.keys(NODE_REGISTRY)])).filter(k => k !== 'output');
+  const allNodeKeys = Array.from(new Set(NODE_LIST.flatMap(c => c.types))).filter(k => k !== 'output');
   const contextFilteredNodes = allNodeKeys.filter(key => {
-      const label = ((getNodeModule(key)?.definition ?? NODE_DEFINITIONS[key as NodeType]) as any).label.toLowerCase();
+      const label = (getDefinitionOrPlaceholder(key) as any).label.toLowerCase();
      return label.includes(contextSearch.toLowerCase());
   });
 
@@ -869,7 +917,7 @@ const App: React.FC = () => {
                             onClick={() => addNode(type as NodeType, contextMenu.x, contextMenu.y)} 
                             className="w-full text-left px-3 py-1.5 text-xs text-gray-300 hover:bg-blue-600 hover:text-white transition-colors"
                          >
-                             {((getNodeModule(type)?.definition ?? NODE_DEFINITIONS[type as NodeType]) as any).label}
+                           {(getDefinitionOrPlaceholder(type) as any).label}
                          </button>
                        ))
                    ) : (

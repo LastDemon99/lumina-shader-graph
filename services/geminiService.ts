@@ -1,8 +1,6 @@
-
 import { GoogleGenAI, Type, Schema } from "@google/genai";
-import { NODE_DEFINITIONS } from "../constants";
-import { NodeType, ShaderNode, Connection } from "../types";
-import { NODE_REGISTRY, getNodeModule } from "../nodes";
+import { ShaderNode, Connection } from "../types";
+import { ALL_NODE_TYPES, getNodeModule } from "../nodes";
 import { getFallbackSocketId } from "../nodes/runtime";
 
 // Schema is shared between draft and refine stages
@@ -47,13 +45,13 @@ const GRAPH_SCHEMA: Schema = {
 export class GeminiService {
   private modelId = 'gemini-3-flash-preview';
 
-  private definitions = Array.from(new Set([...Object.keys(NODE_DEFINITIONS), ...Object.keys(NODE_REGISTRY)])).join(', ');
+  private definitions = Array.from(new Set([...ALL_NODE_TYPES, 'output', 'vertex'])).join(', ');
 
   private sanitizeGraph(rawData: any) {
       if (!rawData || !rawData.nodes || !rawData.connections) return null;
 
       const sanitizedNodes = rawData.nodes;
-      const sanitizedConnections = rawData.connections.map((conn: any) => {
+        const sanitizedConnections = rawData.connections.map((conn: any) => {
           const sourceNode = sanitizedNodes.find((n: any) => n.id === conn.sourceNodeId);
           const targetNode = sanitizedNodes.find((n: any) => n.id === conn.targetNodeId);
 
@@ -61,8 +59,8 @@ export class GeminiService {
 
           const sourceMod = getNodeModule(sourceNode.type);
           const targetMod = getNodeModule(targetNode.type);
-          const sourceDef = (sourceMod?.definition ?? NODE_DEFINITIONS[sourceNode.type as NodeType]) as any;
-          const targetDef = (targetMod?.definition ?? NODE_DEFINITIONS[targetNode.type as NodeType]) as any;
+          const sourceDef = sourceMod?.definition as any;
+          const targetDef = targetMod?.definition as any;
 
           if (!sourceDef || !targetDef) return null;
 
@@ -111,9 +109,40 @@ export class GeminiService {
           };
       }).filter((c: any) => c !== null);
 
+      // Enforce maxConnections capacity on target inputs to prevent over-connected graphs.
+      const seen = new Set<string>();
+      const keptCounts = new Map<string, number>();
+      const cappedConnections: any[] = [];
+
+      for (let i = sanitizedConnections.length - 1; i >= 0; i--) {
+        const conn = sanitizedConnections[i];
+        const dedupeKey = `${conn.sourceNodeId}:${conn.sourceSocketId}->${conn.targetNodeId}:${conn.targetSocketId}`;
+        if (seen.has(dedupeKey)) continue;
+        seen.add(dedupeKey);
+
+        const targetNode = sanitizedNodes.find((n: any) => n.id === conn.targetNodeId);
+        if (!targetNode) continue;
+
+        const targetMod = getNodeModule(targetNode.type);
+        const max = (targetMod?.definition as any)?.inputs?.find((i: any) => i.id === conn.targetSocketId)?.maxConnections ?? 1;
+        const key = `${conn.targetNodeId}:${conn.targetSocketId}`;
+        const count = keptCounts.get(key) ?? 0;
+
+        if (max === 1) {
+          if (count >= 1) continue;
+        } else if (count >= max) {
+          continue;
+        }
+
+        keptCounts.set(key, count + 1);
+        cappedConnections.push(conn);
+      }
+
+      cappedConnections.reverse();
+
       return {
           nodes: sanitizedNodes,
-          connections: sanitizedConnections
+          connections: cappedConnections
       };
   }
 

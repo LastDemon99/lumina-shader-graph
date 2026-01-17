@@ -1,9 +1,13 @@
-import { NODE_DEFINITIONS } from '../../constants';
 import type { NodeModule } from '../types';
 
 export const viewDirectionNode: NodeModule = {
   type: 'viewDirection',
-  definition: NODE_DEFINITIONS.viewDirection,
+  definition: {
+    type: 'viewDirection',
+    label: 'View Direction',
+    inputs: [],
+    outputs: [{ id: 'out', label: 'Out(3)', type: 'vec3' }],
+  },
   ui: {
     sections: [
       {
@@ -30,4 +34,12 @@ export const viewDirectionNode: NodeModule = {
   initialData: () => ({
     space: 'World',
   }),
+  glsl: {
+    emit: ctx => {
+      const v = ctx.varName(ctx.id);
+      ctx.body.push(`vec3 ${v} = normalize(u_cameraPosition - vPosition);`);
+      ctx.variables[`${ctx.id}_out`] = { name: v, type: 'vec3' };
+      return true;
+    },
+  },
 };

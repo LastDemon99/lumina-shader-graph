@@ -1,9 +1,13 @@
-import { NODE_DEFINITIONS } from '../../constants';
 import type { NodeModule } from '../types';
 
 export const bitangentNode: NodeModule = {
   type: 'bitangent',
-  definition: NODE_DEFINITIONS.bitangent,
+  definition: {
+    type: 'bitangent',
+    label: 'Bitangent Vector',
+    inputs: [],
+    outputs: [{ id: 'out', label: 'Out', type: 'vec3' }],
+  },
   ui: {
     sections: [
       {
@@ -30,4 +34,18 @@ export const bitangentNode: NodeModule = {
   initialData: () => ({
     space: 'World',
   }),
+  glsl: {
+    emit: ctx => {
+      const v = ctx.varName(ctx.id);
+      if (ctx.mode === 'vertex') {
+        ctx.body.push(`vec3 ${v}_n = normalize(mat3(u_model) * normal);`);
+        ctx.body.push(`vec3 ${v}_t = normalize(mat3(u_model) * tangent.xyz);`);
+        ctx.body.push(`vec3 ${v} = normalize(cross(${v}_n, ${v}_t) * tangent.w);`);
+      } else {
+        ctx.body.push(`vec3 ${v} = normalize(vBitangent);`);
+      }
+      ctx.variables[`${ctx.id}_out`] = { name: v, type: 'vec3' };
+      return true;
+    },
+  },
 };

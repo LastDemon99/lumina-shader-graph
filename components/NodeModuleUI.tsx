@@ -66,6 +66,8 @@ const setBoundValue = (
 };
 
 export const NodeModuleUI: React.FC<NodeModuleUIProps> = ({ ui, node, allConnections, onUpdateData }) => {
+  if (!ui.sections || ui.sections.length === 0) return null;
+
   const fileInputRef = useRef<HTMLInputElement>(null);
   const arrayFileInputRef = useRef<HTMLInputElement>(null);
   const gradientRef = useRef<HTMLDivElement>(null);

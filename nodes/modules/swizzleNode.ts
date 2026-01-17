@@ -1,4 +1,5 @@
 import type { NodeModule } from '../types';
+import type { SocketType } from '../../types';
 
 const MASK_OPTIONS = [
   { label: 'X', value: 'x' },
@@ -51,4 +52,24 @@ export const swizzleNode: NodeModule = {
     },
   },
   initialData: () => ({ mask: 'xyzw' }),
+  glsl: {
+    emit: ctx => {
+      const i = ctx.getInput(ctx.id, 'in', 'vec4(0.0)', 'vec4');
+      const mask = (ctx.node.data.mask || 'xyzw') as string;
+      const v = ctx.varName(ctx.id);
+
+      const outType: SocketType =
+        mask.length === 1
+          ? 'float'
+          : mask.length === 2
+            ? 'vec2'
+            : mask.length === 3
+              ? 'vec3'
+              : 'vec4';
+
+      ctx.body.push(`${outType} ${v} = ${i}.${mask};`);
+      ctx.variables[`${ctx.id}_out`] = { name: v, type: outType };
+      return true;
+    },
+  },
 };

@@ -91,7 +91,7 @@ export const getEffectiveSockets = (
       type,
       visible,
       enabled,
-      maxConnections: direction === 'input' ? rule?.maxConnections : undefined,
+      maxConnections: rule?.maxConnections,
     };
   });
 };

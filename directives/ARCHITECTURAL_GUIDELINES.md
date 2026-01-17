@@ -55,17 +55,16 @@ Hemos adoptado una arquitectura de **Contexto Único** para los nodos del grafo 
 La generación de código GLSL es el núcleo de la aplicación.
 
 1.  **`services/glslGenerator.ts`:**
-    *   Es el único lugar donde se escribe strings de GLSL.
-    *   **Estándar:** Ver `GLSL_STANDARDS.md` para reglas estrictas de tipado (Float vs Int).
-    *   **Robustez Matemática:** El generador actúa como un firewall contra errores matemáticos. Debe implementar protocolos de "Safe Math" (Power seguro, división segura) automáticamente.
-    *   **Sistema de Helpers:** Utiliza inyección de funciones solo cuando son necesarias.
-    *   **Uniforms Dinámicos:** Inyecta automáticamente dependencias como `u_texDim_{ID}`.
+    *   Es el **orquestador** de generación: construye header/uniforms/varyings, ordena el grafo (tree-shaking) y ofrece un `EmitContext` a cada nodo.
+    *   **Fuente de verdad de “infraestructura GLSL”**: `toGLSL`, `castTo`, `getDynamicType`, inyección de extensiones y helpers globales.
+    *   **Los nodos emiten GLSL** exclusivamente a través de `NodeModule.glsl.emit(ctx)` (ver `nodes/modules/*.ts`).
+    *   **Estándar:** Ver `GLSL_STANDARDS.md` para reglas estrictas de tipado (Float vs Int) y reglas de emisión por módulo.
 
 ### 2.1. Resolución Dinámica de Dimensiones (Polimorfismo)
 Los nodos matemáticos (`Add`, `Mul`, `Pow`, `Mix`, etc.) son polimórficos. Su tipo de dato de salida depende de los tipos de entrada.
 
-*   **Estrategia:** El generador NO debe asumir `vec3` por defecto.
-*   **Implementación:** Debe existir una función auxiliar (ej. `getDynamicType(nodeId, inputs)`) que:
+*   **Estrategia:** No asumir `vec3` por defecto.
+*   **Implementación:** Los nodos matemáticos deben pedir el tipo resultante con `ctx.getDynamicType([...socketIds])` y castear inputs con `ctx.castTo(...)`.
     1.  Recorra las conexiones hacia atrás.
     2.  Determine el "Rango Máximo" de los inputs (`vec4` > `vec3` > `vec2` > `float`).
     3.  Ajuste la generación de código para castear automáticamente los operandos de menor rango al rango máximo.
@@ -104,7 +103,33 @@ La funcionalidad de "AI Assist" no es una simple llamada a API, es un pipeline e
     *   Analiza la integridad estructural del grafo.
     *   Detecta ciclos, nodos huerfanos y falta de Masters.
 
-## 5. Flujo de Trabajo para Nuevas Funcionalidades
+## 5. Arquitectura de Nodos (Modularidad estricta)
+
+Lumina es **module-first**: cada tipo de nodo vive en su propio archivo y define todo lo necesario.
+
+### 5.1. Regla de oro
+Para añadir/editar/eliminar un nodo no debe ser necesario tocar un “mapa central” de definiciones.
+
+### 5.2. Cómo se añade un nodo nuevo
+1. Crear un archivo nuevo en `nodes/modules/<nombre>Node.ts`.
+2. Exportar un objeto `NodeModule` con:
+    - `type` (string estable)
+    - `definition` (label + sockets)
+    - `ui` (opcional)
+    - `socketRules` (opcional)
+    - `initialData` (opcional)
+    - `glsl.emit(ctx)` (opcional; si el nodo participa en GLSL)
+3. No registrar el nodo manualmente: `nodes/index.ts` lo descubre por `import.meta.glob`.
+
+### 5.3. Bootstrap del grafo inicial
+El grafo inicial vive en `initialGraph.ts`. Si se cambia el “starter graph”, se cambia ahí.
+
+### 5.4. Nodos desconocidos
+Si se carga un grafo con un `type` sin módulo presente:
+* La UI y el linter deben degradar de forma segura (placeholder/aviso).
+* No se debe “revivir” con definiciones legacy.
+
+## 6. Flujo de Trabajo para Nuevas Funcionalidades
 
 Si vas a añadir una nueva característica, sigue este árbol de decisión:
 
@@ -114,8 +139,8 @@ Si vas a añadir una nueva característica, sigue este árbol de decisión:
 3.  Impórtalo en los componentes visuales.
 
 ### ¿Quieres añadir un nodo procedural complejo (ej. Fractal)?
-1.  **SÍ** define la función matemática GLSL en `HELPER_FUNCTIONS` dentro de `glslGenerator.ts`.
-2.  Implementa el `case` en `processNode` y añade la clave a `helpersNeeded`.
+1. Implementa el nodo como módulo (`nodes/modules/...`).
+2. Si necesitas helpers GLSL reutilizables, añade el string de la función a `ctx.functions` desde `glsl.emit(ctx)`.
 
 ### ¿El Shader falla al compilar (Pantalla Rosa)?
 1.  **NO** intentes hackear el string en el componente.

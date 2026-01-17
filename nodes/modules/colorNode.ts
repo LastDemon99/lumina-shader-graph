@@ -33,4 +33,17 @@ export const colorNode: NodeModule = {
     },
   },
   initialData: () => ({ value: '#ffffff' }),
+  glsl: {
+    emit: ctx => {
+      const v = ctx.varName(ctx.id);
+      const hex = (ctx.node.data.value || '#ffffff') as string;
+      const rgb = ctx.toGLSL(hex, 'vec3', ctx.mode);
+      ctx.body.push(`vec3 ${v} = ${rgb};`);
+
+      // Compatibility: some legacy code/graphs used `rgb` as the output socket id.
+      ctx.variables[`${ctx.id}_out`] = { name: v, type: 'vec3' };
+      ctx.variables[`${ctx.id}_rgb`] = { name: v, type: 'vec3' };
+      return true;
+    },
+  },
 };

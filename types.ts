@@ -7,9 +7,9 @@ export interface SocketDef {
   type: SocketType;
 }
 
-export type NodeType = 
-  | 'output' 
-  | 'vertex' 
+export type NodeType =
+  | 'output'
+  | 'vertex'
   | 'preview'
   | 'object'
   | 'position'
@@ -20,18 +20,18 @@ export type NodeType =
   | 'viewDirection'
   | 'viewVector'
   | 'vertexColor'
-  | 'color' 
+  | 'color'
   | 'vector2'
   | 'vector3'
   | 'vector4'
   | 'slider'
-  | 'time' 
+  | 'time'
   | 'camera'
   | 'screen'
   | 'screenPosition'
   | 'sceneDepth'
   | 'sceneDepthDifference'
-  | 'float' 
+  | 'float'
   | 'textureAsset'
   | 'texture'
   | 'textureSize'
@@ -50,9 +50,9 @@ export type NodeType =
   | 'matrixConstruction'
   | 'dielectricSpecular'
   | 'metalReflectance'
-  | 'add' 
+  | 'add'
   | 'subtract'
-  | 'multiply' 
+  | 'multiply'
   | 'divide'
   | 'reciprocal'
   | 'power'
@@ -66,9 +66,9 @@ export type NodeType =
   | 'minimum'
   | 'truncate'
   | 'clamp'
-  | 'sine' 
+  | 'sine'
   | 'cosine'
-  | 'mix' 
+  | 'mix'
   | 'uv'
   | 'rotate'
   | 'twirl'
@@ -105,12 +105,13 @@ export type NodeType =
   | 'fadeTransition'
   | 'hue'
   | 'invertColors'
-  | 'swizzle';
+  | 'swizzle'
+  | (string & {});
 
 export interface GradientStop {
-    id: string;
-    t: number; // 0 to 1
-    color: string; // hex
+  id: string;
+  t: number; // 0 to 1
+  color: string; // hex
 }
 
 export interface NodeData {
@@ -118,7 +119,7 @@ export interface NodeData {
   minValue?: number | string; // For Slider Node
   maxValue?: number | string; // For Slider Node
   inputValues?: Record<string, any>; // For inline inputs on logic nodes (e.g. Voronoi Scale)
-  glslName?: string; 
+  glslName?: string;
   space?: string; // For Vector Nodes (Bitangent, etc.)
   blendMode?: string; // For Blend Node
   reciprocalMethod?: 'Default' | 'Fast'; // For Reciprocal Node

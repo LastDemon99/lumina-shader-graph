@@ -1,7 +1,6 @@
-
-import { ShaderNode, Connection, NodeType } from '../types';
-import { NODE_DEFINITIONS } from '../constants';
+import { ShaderNode, Connection } from '../types';
 import { getNodeModule } from '../nodes';
+import { getEffectiveSockets } from '../nodes/runtime';
 
 export const lintGraph = (nodes: ShaderNode[], connections: Connection[]): string[] => {
   const report: string[] = [];
@@ -15,8 +14,44 @@ export const lintGraph = (nodes: ShaderNode[], connections: Connection[]): strin
 
   // 2. Connectivity Checks
   nodes.forEach(node => {
-    const def = (getNodeModule(node.type)?.definition ?? NODE_DEFINITIONS[node.type as NodeType]) as any;
-    if (!def) return;
+    const mod = getNodeModule(node.type);
+    const def = mod?.definition as any;
+    if (!def) {
+      report.push(`Unknown node type '${node.type}' (ID: ${node.id}). Missing module definition.`);
+      return;
+    }
+
+    // Socket rules / maxConnections checks
+    try {
+      const effectiveInputs = getEffectiveSockets(node, def.inputs ?? [], 'input', connections, mod?.socketRules);
+      for (const socket of effectiveInputs) {
+        const incoming = connections.filter(c => c.targetNodeId === node.id && c.targetSocketId === socket.id);
+        const max = socket.maxConnections ?? 1;
+        if (incoming.length > 0 && (!socket.visible || !socket.enabled)) {
+          report.push(
+            `Node '${node.label}' (ID: ${node.id}) has connections to a ${!socket.visible ? 'hidden' : 'disabled'} input '${socket.label}'.`,
+          );
+        }
+        if (incoming.length > max) {
+          report.push(
+            `Node '${node.label}' (ID: ${node.id}) input '${socket.label}' exceeds maxConnections (${incoming.length}/${max}).`,
+          );
+        }
+      }
+
+      const effectiveOutputs = getEffectiveSockets(node, def.outputs ?? [], 'output', connections, mod?.socketRules);
+      for (const socket of effectiveOutputs) {
+        if (socket.maxConnections === undefined) continue;
+        const outgoing = connections.filter(c => c.sourceNodeId === node.id && c.sourceSocketId === socket.id);
+        if (outgoing.length > socket.maxConnections) {
+          report.push(
+            `Node '${node.label}' (ID: ${node.id}) output '${socket.label}' exceeds maxConnections (${outgoing.length}/${socket.maxConnections}).`,
+          );
+        }
+      }
+    } catch {
+      // Keep linter resilient: never crash graph rendering due to a linter edge-case.
+    }
 
     // Check Inputs
     // We skip 'color', 'float', 'time', 'uv', 'position', 'normal' as they are sources

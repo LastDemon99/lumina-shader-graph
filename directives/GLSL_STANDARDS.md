@@ -36,29 +36,25 @@ La función `castTo` en `services/glslGenerator.ts` es la guardiana de la integr
 
 ## 3. Arquitectura del Generador (`glslGenerator.ts`)
 
-### Estructura de la Función `generateCode`
-El generador recorre el grafo recursivamente desde el nodo Output hacia atrás.
+### Estructura de la Generación
+El generador ordena el grafo (tree-shaking/topological sort) y ejecuta la emisión por nodo a través de módulos.
 
-1. **Variables Únicas:** Cada variable generada debe tener un nombre único basado en el ID del nodo para evitar colisiones.
-   - Formato: `var_{nodeId}_{socketId}` (reemplazando guiones con guiones bajos).
-   
-2. **Scope de JS en Switch:**
-   - Los bloques `case` en JavaScript comparten el mismo scope de variables.
-   - **ERROR:** Declarar `const val = ...` en dos `case` distintos causará un crash de la app (Redeclaration error).
-   - **SOLUCIÓN:** Encierra **SIEMPRE** la lógica de cada case entre llaves `{ ... }`.
-   ```typescript
-   case 'add': { // <--- Llave de apertura crítica
-       const val = ...;
-       body.push(...);
-       break;
-   } // <--- Llave de cierre crítica
-   ```
+1. **Variables Únicas:** Usar `ctx.varName(nodeId)` y registrar resultados en `ctx.variables[\"${id}_${socketId}\"]`.
 
-3. **Manejo de Inputs (`getInput`):**
+2. **Manejo de Inputs (`ctx.getInput`)**
    - Siempre proveer un valor por defecto seguro (fallback) si el socket está desconectado.
    - Para floats: `'0.0'`
    - Para vectores: `'vec3(0.0)'`
    - Para texturas: `'u_tex_missing'` (Nunca dejar null o string vacío).
+
+3. **Emisión por módulos (obligatorio)**
+Cada nodo que participa en GLSL debe implementar `NodeModule.glsl.emit(ctx)`.
+El módulo es responsable de:
+- Emitir declaraciones en `ctx.body.push(...)`.
+- Declarar uniforms que requiera vía `ctx.uniforms.add(...)`.
+- Registrar outputs en `ctx.variables`.
+
+Si un nodo no emite (o retorna `false`), el generador puede aplicar un fallback mínimo para no romper compilación, pero esto debe tratarse como bug.
 
 ### 3.1. Manejo de Inputs Especiales (Enums de UI)
 Los nodos con Dropdowns (como `Rotate`, `Twirl` o `UV`) almacenan strings en `data.inputValues` cuando el usuario selecciona una opción en lugar de conectar un cable.
@@ -156,13 +152,15 @@ WebGL usa matrices columna-major.
 Para nodos proceduras complejos (Ruido, Voronoi, Rotación), no inlineamos el código cientos de veces.
 
 ### Mecanismo
-1.  **Definición:** En `glslGenerator.ts`, existe un objeto constante `HELPER_FUNCTIONS` (o variables string) con funciones puras GLSL.
-2.  **Detección:** Durante el recorrido del grafo (`processNode`), si se encuentra un nodo complejo, se añade a `functions` Set.
-3.  **Inyección:** Al final de la generación, se añaden al encabezado.
+1.  **Definición:** Los helpers GLSL deben ser funciones puras en formato string.
+2.  **Solicitud desde nodos:** Un módulo puede añadir helpers con `ctx.functions.add(HELPER_STRING)`.
+3.  **Inyección:** El generador concatena el Set `functions` en el encabezado.
 
 ## 11. Regla de Completitud (Avoid Missing Pink Shader)
 
-**CRÍTICO:** Cada `NodeType` definido en `constants.ts` **DEBE** tener un bloque `case` correspondiente en la función `generateCode` de `glslGenerator.ts`.
+**CRÍTICO:** Cada tipo de nodo que pueda llegar a un Master (`output`/`vertex`) debe:
+- tener un módulo descubierto por `nodes/index.ts`, y
+- si es necesario, implementar `glsl.emit(ctx)` y registrar sus outputs en `ctx.variables`.
 
 ## 12. Estándar de Iluminación y Estética (The Lumina Look)
 
