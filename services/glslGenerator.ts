@@ -4,27 +4,27 @@ import { getNodeModule } from '../nodes';
 // Helper to determine required extensions based on used nodes
 const getRequiredExtensions = (nodes: ShaderNode[], mode: 'fragment' | 'vertex'): string => {
     const extensions = new Set<string>();
-    
+
     const needsDerivatives = nodes.some(n => n.type === 'calculateLevelOfDetailTexture');
-    
+
     // Check if any node potentially needs LOD logic
     // This includes explicit LOD nodes, OR standard texture nodes used in Vertex Shader
     // We strictly enable it if we might need it.
-    const needsLod = nodes.some(n => 
-        n.type === 'sampleTexture2DLOD' || 
+    const needsLod = nodes.some(n =>
+        n.type === 'sampleTexture2DLOD' ||
         (mode === 'vertex' && n.type === 'texture') ||
-        n.type === 'textureSize' || 
+        n.type === 'textureSize' ||
         n.type === 'calculateLevelOfDetailTexture' ||
         (mode === 'vertex' && n.type === 'sampleTexture2DArray') ||
         (mode === 'vertex' && n.type === 'parallaxMapping')
     );
-    
+
     // OES_standard_derivatives is Fragment Only
     if (needsDerivatives && mode === 'fragment') extensions.add('#extension GL_OES_standard_derivatives : enable');
-    
+
     // EXT_shader_texture_lod can be used in Vertex for explicit LOD
     if (needsLod) extensions.add('#extension GL_EXT_shader_texture_lod : enable');
-    
+
     return Array.from(extensions).join('\n') + (extensions.size > 0 ? '\n' : '');
 };
 
@@ -137,48 +137,48 @@ const ATTRIBUTES = `
 
 // Helper to convert TypeScript values to GLSL strings
 const toGLSL = (val: any, type: SocketType, mode: 'fragment' | 'vertex' = 'fragment'): string => {
-  // Handle UV enums
-  if (val === 'UV0') {
-      // In Vertex shader, we must use the attribute 'uv'. 
-      // In Fragment shader, we must use the varying 'vUv'.
-      return mode === 'vertex' ? 'uv' : 'vUv';
-  }
+    // Handle UV enums
+    if (val === 'UV0') {
+        // In Vertex shader, we must use the attribute 'uv'. 
+        // In Fragment shader, we must use the varying 'vUv'.
+        return mode === 'vertex' ? 'uv' : 'vUv';
+    }
 
-  // Handle Scalar Broadcasting first (Critical for math nodes receiving scalar inputs)
-  if (typeof val === 'number' || (typeof val === 'string' && !val.startsWith('#') && !val.includes(',') && !isNaN(parseFloat(val)))) {
-      const f = Number(val);
-      const s = f.toFixed(5);
-      if (type === 'float') return s;
-      if (type === 'vec2') return `vec2(${s}, ${s})`;
-      if (type === 'vec3') return `vec3(${s}, ${s}, ${s})`;
-      if (type === 'vec4') return `vec4(${s}, ${s}, ${s}, ${s})`;
-  }
+    // Handle Scalar Broadcasting first (Critical for math nodes receiving scalar inputs)
+    if (typeof val === 'number' || (typeof val === 'string' && !val.startsWith('#') && !val.includes(',') && !isNaN(parseFloat(val)))) {
+        const f = Number(val);
+        const s = f.toFixed(5);
+        if (type === 'float') return s;
+        if (type === 'vec2') return `vec2(${s}, ${s})`;
+        if (type === 'vec3') return `vec3(${s}, ${s}, ${s})`;
+        if (type === 'vec4') return `vec4(${s}, ${s}, ${s}, ${s})`;
+    }
 
-  if (type === 'float') return Number(val || 0).toFixed(5);
-  if (type === 'vec2') return `vec2(${Number(val?.x || 0).toFixed(5)}, ${Number(val?.y || 0).toFixed(5)})`;
-  if (type === 'vec3') {
-      if (typeof val === 'string' && val.startsWith('#')) {
-          // Hex color
-          const r = parseInt(val.substr(1,2), 16) / 255;
-          const g = parseInt(val.substr(3,2), 16) / 255;
-          const b = parseInt(val.substr(5,2), 16) / 255;
-          return `vec3(${r.toFixed(3)}, ${g.toFixed(3)}, ${b.toFixed(3)})`;
-      }
-      return `vec3(${Number(val?.x || 0).toFixed(5)}, ${Number(val?.y || 0).toFixed(5)}, ${Number(val?.z || 0).toFixed(5)})`;
-  }
-  if (type === 'vec4') return `vec4(${Number(val?.x || 0).toFixed(5)}, ${Number(val?.y || 0).toFixed(5)}, ${Number(val?.z || 0).toFixed(5)}, ${Number(val?.w || 0).toFixed(5)})`;
-  return '0.0';
+    if (type === 'float') return Number(val || 0).toFixed(5);
+    if (type === 'vec2') return `vec2(${Number(val?.x || 0).toFixed(5)}, ${Number(val?.y || 0).toFixed(5)})`;
+    if (type === 'vec3') {
+        if (typeof val === 'string' && val.startsWith('#')) {
+            // Hex color
+            const r = parseInt(val.substr(1, 2), 16) / 255;
+            const g = parseInt(val.substr(3, 2), 16) / 255;
+            const b = parseInt(val.substr(5, 2), 16) / 255;
+            return `vec3(${r.toFixed(3)}, ${g.toFixed(3)}, ${b.toFixed(3)})`;
+        }
+        return `vec3(${Number(val?.x || 0).toFixed(5)}, ${Number(val?.y || 0).toFixed(5)}, ${Number(val?.z || 0).toFixed(5)})`;
+    }
+    if (type === 'vec4') return `vec4(${Number(val?.x || 0).toFixed(5)}, ${Number(val?.y || 0).toFixed(5)}, ${Number(val?.z || 0).toFixed(5)}, ${Number(val?.w || 0).toFixed(5)})`;
+    return '0.0';
 };
 
 // Automatic Casting Logic
 const castTo = (varName: string, from: string, to: string): string => {
     if (!varName) return '0.0';
     if (from === to) return varName;
-    
+
     // Treat 'color' as 'vec3' for logic purposes or handle specific casting
     const f = from === 'color' ? 'vec3' : from;
     const t = to === 'color' ? 'vec3' : to;
-    
+
     if (f === t) return varName;
 
     if (t === 'float') {
@@ -198,7 +198,7 @@ const castTo = (varName: string, from: string, to: string): string => {
         if (f === 'vec2') return `vec4(${varName}, 0.0, 1.0)`;
         if (f === 'vec3') return `vec4(${varName}, 1.0)`;
     }
-    
+
     // Matrices (Simplified fallback)
     if (t === 'mat3' && f === 'mat4') return `mat3(${varName})`;
     if (t === 'mat4' && f === 'mat3') return `mat4(${varName})`;
@@ -208,45 +208,45 @@ const castTo = (varName: string, from: string, to: string): string => {
 
 // Topological Sort to ensure nodes are defined before use
 const sortNodes = (nodes: ShaderNode[], connections: Connection[], targetNodeId?: string): ShaderNode[] => {
-  const visited = new Set<string>();
-  const sorted: ShaderNode[] = [];
-  const processing = new Set<string>();
+    const visited = new Set<string>();
+    const sorted: ShaderNode[] = [];
+    const processing = new Set<string>();
 
-  const visit = (nodeId: string) => {
-    if (visited.has(nodeId)) return;
-    if (processing.has(nodeId)) {
-        // Cycle detected, stop branch
-        return; 
+    const visit = (nodeId: string) => {
+        if (visited.has(nodeId)) return;
+        if (processing.has(nodeId)) {
+            // Cycle detected, stop branch
+            return;
+        }
+
+        processing.add(nodeId);
+
+        // Find inputs
+        const inputConns = connections.filter(c => c.targetNodeId === nodeId);
+        for (const conn of inputConns) {
+            visit(conn.sourceNodeId);
+        }
+
+        processing.delete(nodeId);
+        visited.add(nodeId);
+        const n = nodes.find(n => n.id === nodeId);
+        if (n) sorted.push(n);
+    };
+
+    if (targetNodeId) {
+        // Only visit nodes needed by the target (Tree Shaking)
+        visit(targetNodeId);
+    } else {
+        // Visit all output nodes first
+        const masters = nodes.filter(n => n.type === 'output' || n.type === 'vertex');
+        masters.forEach(m => visit(m.id));
+        // If we have disconnected islands not leading to output, visit them too (mostly for preview generation)
+        nodes.forEach(n => {
+            if (!visited.has(n.id)) visit(n.id);
+        });
     }
-    
-    processing.add(nodeId);
-    
-    // Find inputs
-    const inputConns = connections.filter(c => c.targetNodeId === nodeId);
-    for (const conn of inputConns) {
-        visit(conn.sourceNodeId);
-    }
-    
-    processing.delete(nodeId);
-    visited.add(nodeId);
-    const n = nodes.find(n => n.id === nodeId);
-    if (n) sorted.push(n);
-  };
 
-  if (targetNodeId) {
-    // Only visit nodes needed by the target (Tree Shaking)
-    visit(targetNodeId);
-  } else {
-    // Visit all output nodes first
-    const masters = nodes.filter(n => n.type === 'output' || n.type === 'vertex');
-    masters.forEach(m => visit(m.id));
-    // If we have disconnected islands not leading to output, visit them too (mostly for preview generation)
-    nodes.forEach(n => {
-        if (!visited.has(n.id)) visit(n.id);
-    });
-  }
-
-  return sorted;
+    return sorted;
 };
 
 interface VariableDef {
@@ -255,199 +255,224 @@ interface VariableDef {
 }
 
 const processGraph = (nodes: ShaderNode[], connections: Connection[], targetNodeId: string | undefined, mode: 'fragment' | 'vertex'): string => {
-  
-  // DETERMINE ROOT FOR SORTING (TREE SHAKING)
-  let sortRootId = targetNodeId;
-  
-  if (!sortRootId) {
-      if (mode === 'vertex') {
-          sortRootId = nodes.find(n => n.type === 'vertex')?.id;
-      } else {
-          sortRootId = nodes.find(n => n.type === 'output')?.id;
-      }
-  }
 
-  const skipProcessing = !targetNodeId && mode === 'vertex' && !sortRootId;
-  const sorted = skipProcessing ? [] : sortNodes(nodes, connections, sortRootId);
+    // DETERMINE ROOT FOR SORTING (TREE SHAKING)
+    let sortRootId = targetNodeId;
 
-  const variables: Record<string, VariableDef> = {};
-  const body: string[] = [];
-  const uniforms = new Set<string>();
-  const functions = new Set<string>();
+    if (!sortRootId) {
+        if (mode === 'vertex') {
+            sortRootId = nodes.find(n => n.type === 'vertex')?.id;
+        } else {
+            sortRootId = nodes.find(n => n.type === 'output')?.id;
+        }
+    }
 
-  const varName = (id: string, socket?: string) => `v_${id.replace(/-/g, '_')}_${socket || 'out'}`;
+    const skipProcessing = !targetNodeId && mode === 'vertex' && !sortRootId;
+    const sorted = skipProcessing ? [] : sortNodes(nodes, connections, sortRootId);
 
-  // Helper to get input variable name with AUTOMATIC CASTING
-  const getInput = (nodeId: string, socketId: string, defaultVal: string, type: SocketType): string => {
-      // 1. Check Connection
-      const conn = connections.find(c => c.targetNodeId === nodeId && c.targetSocketId === socketId);
-      if (conn) {
-          const sourceVar = variables[`${conn.sourceNodeId}_${conn.sourceSocketId}`];
-          if (sourceVar) {
-              return castTo(sourceVar.name, sourceVar.type, type);
-          }
-      }
-      
-      // 2. Check Inline Value in Node Data
-      const node = nodes.find(n => n.id === nodeId);
-      if (node && node.data.inputValues && node.data.inputValues[socketId] !== undefined) {
-          return toGLSL(node.data.inputValues[socketId], type, mode);
-      }
-      
-      // 3. Fallback to node-specific defaults (Slider, Color) if not strictly an input socket but a value container
-      if (node && (node.type === 'float' || node.type === 'color' || node.type === 'slider')) {
-           return toGLSL(node.data.value, type, mode);
-      }
-      
-      return defaultVal;
-  };
+    const variables: Record<string, VariableDef> = {};
+    const body: string[] = [];
+    const uniforms = new Set<string>();
+    const functions = new Set<string>();
 
-  const getTextureUniformName = (nodeId: string): string => {
-      const conn = connections.find(c => c.targetNodeId === nodeId && c.targetSocketId === 'texture');
-      const sourceId = conn ? conn.sourceNodeId : nodeId;
-      return `u_tex_${sourceId.replace(/[-.]/g, '_')}`;
-  };
+    const varName = (id: string, socket?: string) => `v_${id.replace(/-/g, '_')}_${socket || 'out'}`;
 
-  const getTextureDimUniformName = (nodeId: string): string => {
-      const conn = connections.find(c => c.targetNodeId === nodeId && c.targetSocketId === 'texture');
-      const sourceId = conn ? conn.sourceNodeId : nodeId;
-      return `u_texDim_${sourceId.replace(/[-.]/g, '_')}`;
-  };
+    // Helper to get input variable name with AUTOMATIC CASTING
+    const getInput = (nodeId: string, socketId: string, defaultVal: string, type: SocketType): string => {
+        // 1. Check Connection
+        const conn = connections.find(c => c.targetNodeId === nodeId && c.targetSocketId === socketId);
+        if (conn) {
+            const sourceVar = variables[`${conn.sourceNodeId}_${conn.sourceSocketId}`];
+            if (sourceVar) {
+                return castTo(sourceVar.name, sourceVar.type, type);
+            }
+        }
 
-  // Helper to determine dynamic type for Math Nodes based on connections
-  const getDynamicType = (nodeId: string, inputs: string[]): SocketType => {
-      let highestRank = 0; // 0=float, 1=vec2, 2=vec3, 3=vec4
-      
-      inputs.forEach(socketId => {
-          const conn = connections.find(c => c.targetNodeId === nodeId && c.targetSocketId === socketId);
-          if (conn) {
-              const srcType = variables[`${conn.sourceNodeId}_${conn.sourceSocketId}`]?.type;
-              if (srcType === 'vec4') highestRank = Math.max(highestRank, 3);
-              else if (srcType === 'vec3' || srcType === 'color') highestRank = Math.max(highestRank, 2);
-              else if (srcType === 'vec2') highestRank = Math.max(highestRank, 1);
-          }
-      });
+        // 2. Check Inline Value in Node Data
+        const node = nodes.find(n => n.id === nodeId);
+        if (node && node.data.inputValues && node.data.inputValues[socketId] !== undefined) {
+            return toGLSL(node.data.inputValues[socketId], type, mode);
+        }
 
-      if (highestRank === 3) return 'vec4';
-      if (highestRank === 2) return 'vec3';
-      if (highestRank === 1) return 'vec2';
-      return 'float'; // Default if only floats or disconnected
-  };
+        // 3. Fallback to node-specific defaults (Slider, Color) if not strictly an input socket but a value container
+        if (node && (node.type === 'float' || node.type === 'color' || node.type === 'slider')) {
+            return toGLSL(node.data.value, type, mode);
+        }
 
-  for (const node of sorted) {
-      const id = node.id;
-      
-      try {
-        const nodeModule = getNodeModule(node.type);
-        const handledByModule = nodeModule?.glsl?.emit?.({
-            id,
-            node,
-                        nodes,
-                        connections,
-            mode,
-            body,
-            uniforms,
-            functions,
-            variables,
-            getInput,
-            getDynamicType: (inputSocketIds: string[]) => getDynamicType(id, inputSocketIds),
-                        getTextureUniformName,
-                        getTextureDimUniformName,
-            varName,
-            castTo,
-            toGLSL,
+        return defaultVal;
+    };
+
+    const getTextureUniformName = (nodeId: string): string => {
+        const conn = connections.find(c => c.targetNodeId === nodeId && c.targetSocketId === 'texture');
+        const sourceId = conn ? conn.sourceNodeId : nodeId;
+        return `u_tex_${sourceId.replace(/[-.]/g, '_')}`;
+    };
+
+    const getTextureDimUniformName = (nodeId: string): string => {
+        const conn = connections.find(c => c.targetNodeId === nodeId && c.targetSocketId === 'texture');
+        const sourceId = conn ? conn.sourceNodeId : nodeId;
+        return `u_texDim_${sourceId.replace(/[-.]/g, '_')}`;
+    };
+
+    // Helper to determine dynamic type for Math Nodes based on connections
+    const getDynamicType = (nodeId: string, inputs: string[]): SocketType => {
+        let highestRank = 0; // 0=float, 1=vec2, 2=vec3, 3=vec4
+
+        inputs.forEach(socketId => {
+            const conn = connections.find(c => c.targetNodeId === nodeId && c.targetSocketId === socketId);
+            if (conn) {
+                const srcType = variables[`${conn.sourceNodeId}_${conn.sourceSocketId}`]?.type;
+                if (srcType === 'vec4') highestRank = Math.max(highestRank, 3);
+                else if (srcType === 'vec3' || srcType === 'color') highestRank = Math.max(highestRank, 2);
+                else if (srcType === 'vec2') highestRank = Math.max(highestRank, 1);
+            }
         });
 
-        if (handledByModule) {
-            continue;
+        if (highestRank === 3) return 'vec4';
+        if (highestRank === 2) return 'vec3';
+        if (highestRank === 1) return 'vec2';
+        return 'float'; // Default if only floats or disconnected
+    };
+
+    for (const node of sorted) {
+        const id = node.id;
+
+        try {
+            const nodeModule = getNodeModule(node.type);
+            const handledByModule = nodeModule?.glsl?.emit?.({
+                id,
+                node,
+                nodes,
+                connections,
+                mode,
+                body,
+                uniforms,
+                functions,
+                variables,
+                getInput,
+                getDynamicType: (inputSocketIds: string[]) => getDynamicType(id, inputSocketIds),
+                getTextureUniformName,
+                getTextureDimUniformName,
+                varName,
+                castTo,
+                toGLSL,
+            });
+
+            if (handledByModule) {
+                continue;
+            }
+
+            // Modules are now the single source of truth for GLSL emission.
+            // Keep a minimal fallback to avoid breaking compilation if a node isn't handled.
+            if (!variables[`${id}_out`] && !variables[`${id}_rgba`]) {
+                const v = varName(id);
+                body.push(`float ${v} = 0.0; // Unhandled: ${node.type}`);
+                variables[`${id}_out`] = { name: v, type: 'float' };
+            }
+        } catch (e) {
+            // Ignore
         }
+    }
 
-        // Modules are now the single source of truth for GLSL emission.
-        // Keep a minimal fallback to avoid breaking compilation if a node isn't handled.
-        if (!variables[`${id}_out`] && !variables[`${id}_rgba`]) {
-            const v = varName(id);
-            body.push(`float ${v} = 0.0; // Unhandled: ${node.type}`);
-            variables[`${id}_out`] = { name: v, type: 'float' };
+    let finalAssignment = '';
+
+    if (targetNodeId) {
+        const node = nodes.find(n => n.id === targetNodeId);
+        if (node) {
+            let resultVar = 'vec3(1.0, 0.0, 1.0)';
+
+            if (variables[`${targetNodeId}_out`]) {
+                resultVar = castTo(variables[`${targetNodeId}_out`].name, variables[`${targetNodeId}_out`].type, 'vec3');
+            } else if (variables[`${targetNodeId}_rgba`]) {
+                resultVar = castTo(variables[`${targetNodeId}_rgba`].name, 'vec4', 'vec3');
+            } else if (variables[`${targetNodeId}_rgb`]) {
+                resultVar = variables[`${targetNodeId}_rgb`].name;
+            } else if (variables[`${targetNodeId}_r`]) {
+                const r = variables[`${targetNodeId}_r`].name;
+                resultVar = `vec3(${r})`;
+            }
+
+            // Apply Gamma Correction to Preview (Linear -> sRGB)
+            // 1/2.2 approx 0.4545
+            finalAssignment = `gl_FragColor = vec4(pow(max(${resultVar}, 0.0), vec3(0.4545)), 1.0);`;
         }
-      } catch (e) {
-          // Ignore
-      }
-  }
+    } else if (mode === 'fragment') {
+        const master = nodes.find(n => n.type === 'output');
+        if (master) {
+            functions.add(LIGHTING_FUNCTIONS);
 
-  let finalAssignment = '';
+            const color = getInput(master.id, 'color', 'vec3(0.5)', 'vec3');
+            const alpha = getInput(master.id, 'alpha', '1.0', 'float');
+            let normal = getInput(master.id, 'normal', 'vNormal', 'vec3');
+            // Fix: Prevent (0,0,0) normal from UI defaults causing NaNs
+            if (normal === 'vec3(0.00000, 0.00000, 0.00000)') normal = 'vNormal';
 
-  if (targetNodeId) {
-      const node = nodes.find(n => n.id === targetNodeId);
-      if (node) {
-          let resultVar = 'vec3(1.0, 0.0, 1.0)';
-          
-          if (variables[`${targetNodeId}_out`]) {
-              resultVar = castTo(variables[`${targetNodeId}_out`].name, variables[`${targetNodeId}_out`].type, 'vec3');
-          } else if (variables[`${targetNodeId}_rgba`]) {
-              resultVar = castTo(variables[`${targetNodeId}_rgba`].name, 'vec4', 'vec3');
-          } else if (variables[`${targetNodeId}_rgb`]) {
-              resultVar = variables[`${targetNodeId}_rgb`].name;
-          } else if (variables[`${targetNodeId}_r`]) {
-              const r = variables[`${targetNodeId}_r`].name;
-              resultVar = `vec3(${r})`;
-          }
+            const smoothness = getInput(master.id, 'smoothness', '0.5', 'float');
+            const emission = getInput(master.id, 'emission', 'vec3(0.0)', 'vec3');
+            const occlusion = getInput(master.id, 'occlusion', '1.0', 'float');
+            const specular = getInput(master.id, 'specular', 'vec3(0.0)', 'vec3');
+            const alphaClip = getInput(master.id, 'alphaClip', '0.0', 'float');
 
-          // Apply Gamma Correction to Preview (Linear -> sRGB)
-          // 1/2.2 approx 0.4545
-          finalAssignment = `gl_FragColor = vec4(pow(max(${resultVar}, 0.0), vec3(0.4545)), 1.0);`;
-      }
-  } else if (mode === 'fragment') {
-      const master = nodes.find(n => n.type === 'output');
-      if (master) {
-          functions.add(LIGHTING_FUNCTIONS);
-          
-          const color = getInput(master.id, 'color', 'vec3(0.5)', 'vec3');
-          const alpha = getInput(master.id, 'alpha', '1.0', 'float');
-          const normal = getInput(master.id, 'normal', 'vNormal', 'vec3'); 
-          
-          const smoothness = getInput(master.id, 'smoothness', '0.5', 'float');
-          const emission = getInput(master.id, 'emission', 'vec3(0.0)', 'vec3');
-          const occlusion = getInput(master.id, 'occlusion', '1.0', 'float');
-          const specular = getInput(master.id, 'specular', 'vec3(0.0)', 'vec3'); 
-          const alphaClip = getInput(master.id, 'alphaClip', '0.0', 'float');
+            body.push(`if (${alpha} < ${alphaClip}) discard;`);
 
-          body.push(`if (${alpha} < ${alphaClip}) discard;`);
+            body.push(`vec3 viewDir = normalize(u_cameraPosition - vPosition);`);
+            body.push(`vec3 lightDir = normalize(vec3(0.5, 1.0, 0.5));`);
+            body.push(`vec3 lightColor = vec3(1.0, 0.98, 0.95);`);
 
-          body.push(`vec3 viewDir = normalize(u_cameraPosition - vPosition);`);
-          body.push(`vec3 lightDir = normalize(vec3(0.5, 1.0, 0.5));`);
-          body.push(`vec3 lightColor = vec3(1.0, 0.98, 0.95);`);
-          
-          body.push(`vec3 lighting = applyLighting(${color}, ${normal}, viewDir, lightDir, lightColor, ${specular}, ${smoothness}, ${occlusion});`);
-          
-          // Apply Gamma Correction to Final Output
-          body.push(`vec3 finalColor = pow(max(lighting + ${emission}, 0.0), vec3(0.4545));`);
-          
-          body.push(`gl_FragColor = vec4(finalColor, ${alpha});`);
-      } else {
-          finalAssignment = `gl_FragColor = vec4(1.0, 0.0, 1.0, 1.0);`; 
-      }
-  } else {
-      const master = nodes.find(n => n.type === 'vertex');
-      if (master) {
-          const pos = getInput(master.id, 'position', 'position', 'vec3'); 
-          const normal = getInput(master.id, 'normal', 'normal', 'vec3');
-          const tangent = getInput(master.id, 'tangent', 'tangent.xyz', 'vec3'); 
+            body.push(`vec3 lighting = applyLighting(${color}, ${normal}, viewDir, lightDir, lightColor, ${specular}, ${smoothness}, ${occlusion});`);
 
-          finalAssignment += `vUv = uv;\n`;
-          finalAssignment += `vColor = color;\n`;
-          finalAssignment += `vec4 worldPos = u_model * vec4(${pos}, 1.0);\n`;
-          finalAssignment += `vPosition = worldPos.xyz;\n`;
-          finalAssignment += `vObjectPosition = ${pos};\n`;
-          finalAssignment += `mat3 normalMatrix = mat3(u_model);\n`;
-          finalAssignment += `vNormal = normalize(normalMatrix * ${normal});\n`;
-          finalAssignment += `vTangent = normalize(normalMatrix * ${tangent});\n`; 
-          finalAssignment += `vBitangent = normalize(cross(vNormal, vTangent) * tangent.w);\n`; 
-          finalAssignment += `vObjectNormal = ${normal};\n`;
-          finalAssignment += `vObjectTangent = ${tangent};\n`;
-          finalAssignment += `gl_Position = u_projection * u_view * worldPos;\n`;
-      } else {
-           // Default Vertex Shader if no Master Node exists, to avoid crashing
-           finalAssignment += `
+            // Apply Gamma Correction to Final Output
+            body.push(`vec3 finalColor = pow(max(lighting + ${emission}, 0.0), vec3(0.4545));`);
+
+            body.push(`gl_FragColor = vec4(finalColor, ${alpha});`);
+        } else {
+            finalAssignment = `gl_FragColor = vec4(1.0, 0.0, 1.0, 1.0);`;
+        }
+    } else {
+        const master = nodes.find(n => n.type === 'vertex');
+        if (master) {
+            // Robust check for connections
+            const hasInput = (socketId: string) => connections.some(c => c.targetNodeId === master.id && c.targetSocketId === socketId);
+
+            let pos = 'position';
+            if (hasInput('position')) {
+                pos = getInput(master.id, 'position', 'position', 'vec3');
+            } else {
+                const val = master.data.inputValues?.['position'];
+                if (val && (val.x !== 0 || val.y !== 0 || val.z !== 0)) pos = toGLSL(val, 'vec3', mode);
+            }
+
+            let normal = 'normal';
+            if (hasInput('normal')) {
+                normal = getInput(master.id, 'normal', 'normal', 'vec3');
+            } else {
+                const val = master.data.inputValues?.['normal'];
+                if (val && (val.x !== 0 || val.y !== 0 || val.z !== 0)) normal = toGLSL(val, 'vec3', mode);
+            }
+
+            let tangent = 'tangent.xyz';
+            if (hasInput('tangent')) {
+                tangent = getInput(master.id, 'tangent', 'tangent.xyz', 'vec3');
+            } else {
+                const val = master.data.inputValues?.['tangent'];
+                if (val && (val.x !== 0 || val.y !== 0 || val.z !== 0)) tangent = toGLSL(val, 'vec3', mode);
+            }
+
+            finalAssignment += `vUv = uv;\n`;
+            finalAssignment += `vColor = color;\n`;
+            finalAssignment += `vec4 worldPos = u_model * vec4(${pos}, 1.0);\n`;
+            finalAssignment += `vPosition = worldPos.xyz;\n`;
+            finalAssignment += `vObjectPosition = ${pos};\n`;
+            finalAssignment += `mat3 normalMatrix = mat3(u_model);\n`;
+            finalAssignment += `vNormal = normalize(normalMatrix * ${normal});\n`;
+            finalAssignment += `vTangent = normalize(normalMatrix * ${tangent});\n`;
+            finalAssignment += `vBitangent = normalize(cross(vNormal, vTangent) * tangent.w);\n`;
+            finalAssignment += `vObjectNormal = ${normal};\n`;
+            finalAssignment += `vObjectTangent = ${tangent};\n`;
+            finalAssignment += `gl_Position = u_projection * u_view * worldPos;\n`;
+        } else {
+            // Default Vertex Shader if no Master Node exists, to avoid crashing
+            finalAssignment += `
              vUv = uv;
              vColor = color;
              vec4 worldPos = u_model * vec4(position, 1.0);
@@ -458,13 +483,13 @@ const processGraph = (nodes: ShaderNode[], connections: Connection[], targetNode
              vBitangent = normalize(cross(vNormal, vTangent) * tangent.w);
              vObjectNormal = normal;
              vObjectTangent = tangent.xyz;\n`; // Fixed missing semicolon
-      }
-  }
+        }
+    }
 
-  // Combine components
-  const extensions = getRequiredExtensions(nodes, mode);
+    // Combine components
+    const extensions = getRequiredExtensions(nodes, mode);
 
-  return `
+    return `
 ${extensions}
 ${COMMON_HEADER}
 ${mode === 'vertex' ? ATTRIBUTES : ''}

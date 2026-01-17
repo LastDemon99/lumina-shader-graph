@@ -5,12 +5,12 @@
 
 export const createWebGLContext = (canvas: HTMLCanvasElement): WebGLRenderingContext | null => {
     // Try to get context, handle failure
-    const gl = canvas.getContext('webgl', { 
-        preserveDrawingBuffer: false, 
+    const gl = canvas.getContext('webgl', {
+        preserveDrawingBuffer: false,
         antialias: true,
         alpha: true
     });
-    
+
     if (!gl) return null;
 
     // CRITICAL EXTENSIONS
@@ -18,12 +18,12 @@ export const createWebGLContext = (canvas: HTMLCanvasElement): WebGLRenderingCon
     // In strict mode we could check for null return here
     gl.getExtension('OES_standard_derivatives');
     gl.getExtension('EXT_shader_texture_lod');
-    
+
     // Enable Anisotropic Filtering for sharper textures at angles
-    const extAniso = gl.getExtension('EXT_texture_filter_anisotropic') || 
-                     gl.getExtension('MOZ_EXT_texture_filter_anisotropic') || 
-                     gl.getExtension('WEBKIT_EXT_texture_filter_anisotropic');
-    
+    const extAniso = gl.getExtension('EXT_texture_filter_anisotropic') ||
+        gl.getExtension('MOZ_EXT_texture_filter_anisotropic') ||
+        gl.getExtension('WEBKIT_EXT_texture_filter_anisotropic');
+
     // Store extension on the context object for later use if needed, 
     // mostly implicitly used in applyTextureParams via gl check
     (gl as any)._extAniso = extAniso;
@@ -31,7 +31,7 @@ export const createWebGLContext = (canvas: HTMLCanvasElement): WebGLRenderingCon
     // GLOBAL CONFIGURATION
     gl.enable(gl.DEPTH_TEST);
     gl.depthFunc(gl.LEQUAL);
-    
+
     gl.enable(gl.CULL_FACE);
     gl.cullFace(gl.BACK);
 
@@ -49,13 +49,22 @@ export const createShader = (gl: WebGLRenderingContext, type: number, source: st
     gl.compileShader(shader);
 
     if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
+        if (gl.isContextLost()) {
+            throw new Error('WebGL Context Lost during shader compilation.');
+        }
+
         // Fallback message if log is null (e.g. context lost)
         const log = gl.getShaderInfoLog(shader) || 'Unknown Compile Error (Context might be lost)';
+
+        console.groupCollapsed((type === gl.VERTEX_SHADER ? 'Vertex' : 'Fragment') + ' Shader Source');
+        console.log(source);
+        console.groupEnd();
+
         console.error((type === gl.VERTEX_SHADER ? 'Vertex' : 'Fragment') + ' Shader Error:', log);
-        
+
         // Cleanup failed shader
         gl.deleteShader(shader);
-        
+
         throw new Error((type === gl.VERTEX_SHADER ? 'Vertex' : 'Fragment') + ' Compile Error: ' + log);
     }
 
@@ -67,8 +76,8 @@ export const createProgram = (gl: WebGLRenderingContext, vertSource: string, fra
     const fShader = createShader(gl, gl.FRAGMENT_SHADER, fragSource);
 
     if (!vShader || !fShader) {
-        if(vShader) gl.deleteShader(vShader);
-        if(fShader) gl.deleteShader(fShader);
+        if (vShader) gl.deleteShader(vShader);
+        if (fShader) gl.deleteShader(fShader);
         return null;
     }
 
@@ -95,7 +104,7 @@ const resizeToPOT = (image: HTMLImageElement): HTMLImageElement | HTMLCanvasElem
     const w = image.width;
     const h = image.height;
     const isPowerOfTwo = (value: number) => (value & (value - 1)) === 0 && value > 0;
-    
+
     if (isPowerOfTwo(w) && isPowerOfTwo(h)) return image;
 
     const canvas = document.createElement('canvas');
@@ -121,7 +130,7 @@ export const createPlaceholderTexture = (gl: WebGLRenderingContext): WebGLTextur
         gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array([0, 0, 0, 255]));
         gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
         gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
-        
+
         // Attach default size
         (tex as any)._size = [1, 1];
     }
@@ -135,7 +144,7 @@ export const applyTextureParams = (gl: WebGLRenderingContext, tex: WebGLTexture,
     let wrap: number = gl.REPEAT;
     if (wrapStr === 'Clamp') wrap = gl.CLAMP_TO_EDGE;
     else if (wrapStr === 'Mirror') wrap = gl.MIRRORED_REPEAT;
-    
+
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, wrap);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, wrap);
 
@@ -147,13 +156,13 @@ export const applyTextureParams = (gl: WebGLRenderingContext, tex: WebGLTexture,
         // Linear or Trilinear
         gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
         gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
-        
+
         // Apply Anisotropic Filtering if available and we are using Linear filtering
-        const ext = (gl as any)._extAniso || 
-                    gl.getExtension('EXT_texture_filter_anisotropic') || 
-                    gl.getExtension('MOZ_EXT_texture_filter_anisotropic') || 
-                    gl.getExtension('WEBKIT_EXT_texture_filter_anisotropic');
-                    
+        const ext = (gl as any)._extAniso ||
+            gl.getExtension('EXT_texture_filter_anisotropic') ||
+            gl.getExtension('MOZ_EXT_texture_filter_anisotropic') ||
+            gl.getExtension('WEBKIT_EXT_texture_filter_anisotropic');
+
         if (ext) {
             const max = gl.getParameter(ext.MAX_TEXTURE_MAX_ANISOTROPY_EXT);
             // Use maximum anisotropy available (usually 16)
@@ -179,23 +188,23 @@ export const loadTexture = (gl: WebGLRenderingContext, src: string, wrap?: strin
     img.onload = () => {
         // Ensure context is not lost before binding
         if (gl.isContextLost()) return;
-        
+
         gl.bindTexture(gl.TEXTURE_2D, tex);
         gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
-        
+
         // Store original dimensions for textureSize node BEFORE resizing to POT
         (tex as any)._size = [img.width, img.height];
 
         const texSource = resizeToPOT(img);
 
         gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, texSource);
-        
+
         gl.generateMipmap(gl.TEXTURE_2D);
-        
+
         // Apply params after generation
         applyTextureParams(gl, tex, wrap, filter);
     };
-    
+
     // Handle Data URLs and regular URLs
     img.src = src;
 
