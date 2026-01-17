@@ -1,5 +1,3 @@
-
-
 import { ShaderNode, Connection, NodeType, SocketType, GradientStop } from '../types';
 
 // Helper to determine required extensions based on used nodes
@@ -340,6 +338,16 @@ const processGraph = (nodes: ShaderNode[], connections: Connection[], targetNode
       
       try {
         switch (node.type) {
+            case 'remap': {
+                const i = getInput(id, 'in', 'vec3(0.0)', 'vec3');
+                const inMM = getInput(id, 'inMinMax', 'vec2(-1.0, 1.0)', 'vec2');
+                const outMM = getInput(id, 'outMinMax', 'vec2(0.0, 1.0)', 'vec2');
+                const v = varName(id);
+                body.push(`vec3 ${v}_t = (${i} - ${inMM}.x) / (${inMM}.y - ${inMM}.x + 0.00001);`);
+                body.push(`vec3 ${v} = mix(vec3(${outMM}.x), vec3(${outMM}.y), ${v}_t);`);
+                variables[`${id}_out`] = { name: v, type: 'vec3' };
+                break;
+            }
             case 'transform': {
                 const input = getInput(id, 'in', 'vec3(0.0)', 'vec3');
                 const from = node.data.transformSpaceFrom || 'Object';
@@ -443,7 +451,6 @@ const processGraph = (nodes: ShaderNode[], connections: Connection[], targetNode
                 variables[`${id}_rgba`] = { name: v, type: 'vec4' };
                 break;
             }
-            // ... (Rest of nodes continue without changes, preserving context)
             case 'metalReflectance': {
                 const metal = node.data.metalType || 'Iron';
                 const v = varName(id);
@@ -714,6 +721,58 @@ const processGraph = (nodes: ShaderNode[], connections: Connection[], targetNode
                 variables[`${id}_out`] = { name: v, type: 'vec3' };
                 break;
             }
+            case 'inverseLerp': {
+                const a = getInput(id, 'a', '0.0', 'float');
+                const b = getInput(id, 'b', '1.0', 'float');
+                const t = getInput(id, 't', '0.0', 'float');
+                const v = varName(id);
+                body.push(`vec3 ${v} = vec3(clamp((${t} - ${a}) / (${b} - ${a} + 0.00001), 0.0, 1.0));`);
+                variables[`${id}_out`] = { name: v, type: 'vec3' };
+                break;
+            }
+            case 'remap': {
+                 const i = getInput(id, 'in', 'vec3(0.0)', 'vec3');
+                 const inMM = getInput(id, 'inMinMax', 'vec2(-1.0, 1.0)', 'vec2');
+                 const outMM = getInput(id, 'outMinMax', 'vec2(0.0, 1.0)', 'vec2');
+                 const v = varName(id);
+                 body.push(`vec3 ${v}_t = (${i} - ${inMM}.x) / (${inMM}.y - ${inMM}.x + 0.00001);`);
+                 body.push(`vec3 ${v} = mix(vec3(${outMM}.x), vec3(${outMM}.y), ${v}_t);`);
+                 variables[`${id}_out`] = { name: v, type: 'vec3' };
+                 break;
+             }
+            case 'maximum': {
+                const a = getInput(id, 'a', '0.0', 'float');
+                const b = getInput(id, 'b', '0.0', 'float');
+                const v = varName(id);
+                body.push(`vec3 ${v} = vec3(max(${a}, ${b}));`);
+                variables[`${id}_out`] = { name: v, type: 'vec3' };
+                break;
+            }
+            case 'minimum': {
+                const a = getInput(id, 'a', '0.0', 'float');
+                const b = getInput(id, 'b', '0.0', 'float');
+                const v = varName(id);
+                body.push(`vec3 ${v} = vec3(min(${a}, ${b}));`);
+                variables[`${id}_out`] = { name: v, type: 'vec3' };
+                break;
+            }
+            case 'truncate': {
+                const i = getInput(id, 'in', '0.0', 'float');
+                const v = varName(id);
+                // GLSL doesn't have trunc(), but int cast truncates towards zero
+                body.push(`vec3 ${v} = vec3(float(int(${i})));`);
+                variables[`${id}_out`] = { name: v, type: 'vec3' };
+                break;
+            }
+            case 'clamp': {
+                const i = getInput(id, 'in', '0.0', 'float');
+                const minVal = getInput(id, 'min', '0.0', 'float');
+                const maxVal = getInput(id, 'max', '1.0', 'float');
+                const v = varName(id);
+                body.push(`vec3 ${v} = vec3(clamp(${i}, ${minVal}, ${maxVal}));`);
+                variables[`${id}_out`] = { name: v, type: 'vec3' };
+                break;
+            }
             case 'absolute': {
                 const i = getInput(id, 'in', 'vec3(0.0)', 'vec3');
                 const v = varName(id);
@@ -813,6 +872,22 @@ const processGraph = (nodes: ShaderNode[], connections: Connection[], targetNode
                 body.push(`float ${v}_x = cos(${v}_angle) * ${v}_delta.x - sin(${v}_angle) * ${v}_delta.y;`);
                 body.push(`float ${v}_y = sin(${v}_angle) * ${v}_delta.x + cos(${v}_angle) * ${v}_delta.y;`);
                 body.push(`vec2 ${v} = vec2(${v}_x + ${center}.x + ${offset}.x, ${v}_y + ${center}.y + ${offset}.y);`);
+                variables[`${id}_out`] = { name: v, type: 'vec2' };
+                break;
+            }
+            case 'radialShear': {
+                const defUv = mode === 'vertex' ? 'uv' : 'vUv';
+                const uv = getInput(id, 'uv', defUv, 'vec2');
+                const center = getInput(id, 'center', 'vec2(0.5)', 'vec2');
+                const strength = getInput(id, 'strength', 'vec2(10.0)', 'vec2');
+                const offset = getInput(id, 'offset', 'vec2(0.0)', 'vec2');
+                const v = varName(id);
+
+                body.push(`vec2 ${v}_delta = ${uv} - ${center};`);
+                body.push(`float ${v}_delta2 = dot(${v}_delta, ${v}_delta);`);
+                body.push(`vec2 ${v}_tangential = vec2(${v}_delta.y, -${v}_delta.x);`);
+                body.push(`vec2 ${v} = ${uv} + ${v}_tangential * ${v}_delta2 * ${strength} + ${offset};`);
+                
                 variables[`${id}_out`] = { name: v, type: 'vec2' };
                 break;
             }
@@ -992,6 +1067,24 @@ const processGraph = (nodes: ShaderNode[], connections: Connection[], targetNode
                 variables[`${id}_out`] = { name: v, type: 'vec2' };
                 break;
             }
+            case 'polarCoordinates': {
+                const defUv = mode === 'vertex' ? 'uv' : 'vUv';
+                const uv = getInput(id, 'uv', defUv, 'vec2');
+                const center = getInput(id, 'center', 'vec2(0.5)', 'vec2');
+                const radScale = getInput(id, 'radialScale', '1.0', 'float');
+                const lenScale = getInput(id, 'lengthScale', '1.0', 'float');
+                const v = varName(id);
+
+                body.push(`vec2 ${v}_delta = ${uv} - ${center};`);
+                body.push(`float ${v}_radius = length(${v}_delta) * 2.0 * ${lenScale};`);
+                body.push(`float ${v}_angle = atan(${v}_delta.y, ${v}_delta.x) * 0.159154943;`); // 1 / 2PI
+                // Offset angle by 0.5 to move the seam from Right (0) to Left (PI/-PI)
+                // This aligns with common UV sphere mapping and manual implementations that usually start at -X
+                body.push(`${v}_angle = fract((${v}_angle + 0.5) * ${radScale});`);
+                body.push(`vec2 ${v} = vec2(${v}_radius, ${v}_angle);`);
+                variables[`${id}_out`] = { name: v, type: 'vec2' };
+                break;
+            }
             case 'parallaxMapping': {
                 const uv = getInput(id, 'uv', mode === 'vertex' ? 'uv' : 'vUv', 'vec2');
                 const amplitude = getInput(id, 'amplitude', '1.0', 'float'); // Default 1.0 = 0.1 strength
@@ -1146,6 +1239,58 @@ const processGraph = (nodes: ShaderNode[], connections: Connection[], targetNode
                 const v = varName(id);
                 body.push(`${type} ${v} = smoothstep(${e1}, ${e2}, ${i});`);
                 variables[`${id}_out`] = { name: v, type: type };
+                break;
+            }
+            case 'saturate': {
+                const type = getDynamicType(id, ['in']);
+                const zero = type === 'float' ? '0.0' : `${type}(0.0)`;
+                const one = type === 'float' ? '1.0' : `${type}(1.0)`;
+                const i = getInput(id, 'in', zero, type);
+                const v = varName(id);
+                body.push(`${type} ${v} = clamp(${i}, ${zero}, ${one});`);
+                variables[`${id}_out`] = { name: v, type: type };
+                break;
+            }
+            case 'oneMinus': {
+                const type = getDynamicType(id, ['in']);
+                const one = type === 'float' ? '1.0' : `${type}(1.0)`;
+                const i = getInput(id, 'in', type === 'float' ? '0.0' : `${type}(0.0)`, type);
+                const v = varName(id);
+                body.push(`${type} ${v} = ${one} - ${i};`); 
+                variables[`${id}_out`] = { name: v, type: type };
+                break;
+            }
+            case 'dot': {
+                const a = getInput(id, 'a', 'vec3(0.0)', 'vec3');
+                const b = getInput(id, 'b', 'vec3(0.0)', 'vec3');
+                const v = varName(id);
+                body.push(`float ${v} = dot(${a}, ${b});`);
+                variables[`${id}_out`] = { name: v, type: 'float' };
+                break;
+            }
+            case 'cross': {
+                const a = getInput(id, 'a', 'vec3(0.0)', 'vec3');
+                const b = getInput(id, 'b', 'vec3(0.0)', 'vec3');
+                const v = varName(id);
+                body.push(`vec3 ${v} = cross(${a}, ${b});`);
+                variables[`${id}_out`] = { name: v, type: 'vec3' };
+                break;
+            }
+            case 'negate': {
+                const type = getDynamicType(id, ['in']);
+                const zero = type === 'float' ? '0.0' : `${type}(0.0)`;
+                const i = getInput(id, 'in', zero, type);
+                const v = varName(id);
+                body.push(`${type} ${v} = -${i};`);
+                variables[`${id}_out`] = { name: v, type: type };
+                break;
+            }
+            case 'posterize': {
+                const i = getInput(id, 'in', 'vec3(0.0)', 'vec3');
+                const steps = getInput(id, 'steps', '4.0', 'float');
+                const v = varName(id);
+                body.push(`vec3 ${v} = floor(${i} * ${steps}) / (${steps});`);
+                variables[`${id}_out`] = { name: v, type: 'vec3' };
                 break;
             }
             case 'position': {
@@ -1317,50 +1462,6 @@ const processGraph = (nodes: ShaderNode[], connections: Connection[], targetNode
                 }
                 
                 variables[`${id}_out`] = { name: v, type: 'vec3' };
-                break;
-            }
-            case 'oneMinus': {
-                const type = getDynamicType(id, ['in']);
-                const one = type === 'float' ? '1.0' : `${type}(1.0)`;
-                const i = getInput(id, 'in', type === 'float' ? '0.0' : `${type}(0.0)`, type);
-                const v = varName(id);
-                body.push(`${type} ${v} = ${one} - ${i};`); 
-                variables[`${id}_out`] = { name: v, type: type };
-                break;
-            }
-            case 'dot': {
-                const a = getInput(id, 'a', 'vec3(0.0)', 'vec3');
-                const b = getInput(id, 'b', 'vec3(0.0)', 'vec3');
-                const v = varName(id);
-                body.push(`float ${v} = dot(${a}, ${b});`);
-                variables[`${id}_out`] = { name: v, type: 'float' };
-                break;
-            }
-            case 'cross': {
-                const a = getInput(id, 'a', 'vec3(0.0)', 'vec3');
-                const b = getInput(id, 'b', 'vec3(0.0)', 'vec3');
-                const v = varName(id);
-                body.push(`vec3 ${v} = cross(${a}, ${b});`);
-                variables[`${id}_out`] = { name: v, type: 'vec3' };
-                break;
-            }
-            case 'negate': {
-                const type = getDynamicType(id, ['in']);
-                const zero = type === 'float' ? '0.0' : `${type}(0.0)`;
-                const i = getInput(id, 'in', zero, type);
-                const v = varName(id);
-                body.push(`${type} ${v} = -${i};`);
-                variables[`${id}_out`] = { name: v, type: type };
-                break;
-            }
-            case 'saturate': {
-                const type = getDynamicType(id, ['in']);
-                const zero = type === 'float' ? '0.0' : `${type}(0.0)`;
-                const one = type === 'float' ? '1.0' : `${type}(1.0)`;
-                const i = getInput(id, 'in', zero, type);
-                const v = varName(id);
-                body.push(`${type} ${v} = clamp(${i}, ${zero}, ${one});`);
-                variables[`${id}_out`] = { name: v, type: type };
                 break;
             }
             case 'vertexColor': {

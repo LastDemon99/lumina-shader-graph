@@ -1,5 +1,7 @@
 
 
+
+
 import { ShaderNode, NodeType } from './types';
 
 export const NODE_DEFINITIONS: Record<NodeType, Omit<ShaderNode, 'id' | 'x' | 'y' | 'data'>> = {
@@ -134,6 +136,28 @@ export const NODE_DEFINITIONS: Record<NodeType, Omit<ShaderNode, 'id' | 'x' | 'y
       { id: 'width', label: 'Width(1)', type: 'float' },
       { id: 'height', label: 'Height(1)', type: 'float' },
       { id: 'tile', label: 'Tile(1)', type: 'float' }
+    ],
+    outputs: [{ id: 'out', label: 'Out(2)', type: 'vec2' }]
+  },
+  polarCoordinates: {
+    type: 'polarCoordinates',
+    label: 'Polar Coordinates',
+    inputs: [
+      { id: 'uv', label: 'UV(2)', type: 'vec2' },
+      { id: 'center', label: 'Center(2)', type: 'vec2' },
+      { id: 'radialScale', label: 'Radial Scale(1)', type: 'float' },
+      { id: 'lengthScale', label: 'Length Scale(1)', type: 'float' }
+    ],
+    outputs: [{ id: 'out', label: 'Out(2)', type: 'vec2' }]
+  },
+  radialShear: {
+    type: 'radialShear',
+    label: 'Radial Shear',
+    inputs: [
+      { id: 'uv', label: 'UV(2)', type: 'vec2' },
+      { id: 'center', label: 'Center(2)', type: 'vec2' },
+      { id: 'strength', label: 'Strength(2)', type: 'vec2' },
+      { id: 'offset', label: 'Offset(2)', type: 'vec2' }
     ],
     outputs: [{ id: 'out', label: 'Out(2)', type: 'vec2' }]
   },

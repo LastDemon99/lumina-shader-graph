@@ -44,6 +44,8 @@ export type NodeType =
   | 'gradient'
   | 'sampleGradient'
   | 'flipbook'
+  | 'polarCoordinates'
+  | 'radialShear'
   | 'parallaxMapping'
   | 'matrixConstruction'
   | 'dielectricSpecular'

@@ -1,5 +1,8 @@
 
 
+
+
+
 import React, { useMemo, useRef, useState, useEffect } from 'react';
 import { ShaderNode, SocketType, Connection, GradientStop } from '../types';
 import { Preview } from './Preview';
@@ -39,7 +42,7 @@ const getSocketColor = (type: SocketType) => {
 
 const NO_PREVIEW_TYPES = ['float', 'slider', 'time', 'color', 'vector2', 'vector3', 'vector4', 'uv', 'output', 'vertex', 'textureAsset', 'texture2DArrayAsset', 'gradient', 'screen', 'matrixConstruction', 'dielectricSpecular', 'position', 'mainLightDirection', 'object', 'samplerState', 'split', 'textureSize', 'camera', 'sceneDepth', 'sceneDepthDifference', 'flipbook', 'parallaxMapping', 'reciprocal'];
 
-const WIDE_NODE_TYPES = ['matrixConstruction', 'swizzle', 'channelMask', 'invertColors', 'split', 'slider', 'texture2DArrayAsset', 'transform', 'gradient', 'colorspaceConversion', 'dielectricSpecular', 'sceneDepth', 'sceneDepthDifference', 'parallaxMapping', 'reciprocal'];
+const WIDE_NODE_TYPES = ['matrixConstruction', 'swizzle', 'channelMask', 'invertColors', 'split', 'slider', 'texture2DArrayAsset', 'transform', 'gradient', 'colorspaceConversion', 'dielectricSpecular', 'sceneDepth', 'sceneDepthDifference', 'parallaxMapping', 'reciprocal', 'polarCoordinates', 'radialShear'];
 
 const ThrottledColorInput: React.FC<{ value: string; onChange: (val: string) => void }> = ({ value, onChange }) => {
     const [localValue, setLocalValue] = useState(value);

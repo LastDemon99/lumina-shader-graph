@@ -9,7 +9,7 @@ import { geminiService } from './services/geminiService';
 import { lintGraph } from './services/linter';
 import { ShaderNode, Connection, Viewport, NodeType, SocketType } from './types';
 import { INITIAL_NODES, NODE_DEFINITIONS, INITIAL_CONNECTIONS } from './constants';
-import { Plus, Wand2, Trash2, Download, Upload, ZoomIn, ZoomOut, MousePointer2, Box, Square, Save, Search, Layers, Network, CheckCircle2, Loader2, AlertTriangle, Sparkles, FileJson, AlertCircle } from 'lucide-react';
+import { Wand2, Download, Upload, ZoomIn, ZoomOut, MousePointer2, Box, Square, Save, Layers, Network, CheckCircle2, Loader2, Sparkles, FileJson, AlertCircle, Plus } from 'lucide-react';
 
 const App: React.FC = () => {
   // --- Global State ---
@@ -28,7 +28,6 @@ const App: React.FC = () => {
   const [clipboard, setClipboard] = useState<{ nodes: ShaderNode[], connections: Connection[] } | null>(null);
 
   const [hoveredConnectionId, setHoveredConnectionId] = useState<string | null>(null);
-  const [searchQuery, setSearchQuery] = useState('');
   
   // Preview State (Mini preview in Graph)
   const [previewMode, setPreviewMode] = useState<'2d' | '3d'>('3d');
@@ -39,6 +38,10 @@ const App: React.FC = () => {
   const [mousePos, setMousePos] = useState({ x: 0, y: 0 });
   const [panning, setPanning] = useState(false);
   const [lastPan, setLastPan] = useState({ x: 0, y: 0 });
+
+  // Context Menu State
+  const [contextMenu, setContextMenu] = useState<{ x: number, y: number, open: boolean } | null>(null);
+  const [contextSearch, setContextSearch] = useState('');
 
   // AI Prompt
   const [promptOpen, setPromptOpen] = useState(false);
@@ -138,6 +141,14 @@ const App: React.FC = () => {
   // Refs
   const canvasRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const contextMenuRef = useRef<HTMLInputElement>(null);
+
+  // Focus context search
+  useEffect(() => {
+      if (contextMenu?.open && contextMenuRef.current) {
+          contextMenuRef.current.focus();
+      }
+  }, [contextMenu]);
 
   // Mark as unsaved on changes
   useEffect(() => {
@@ -401,6 +412,8 @@ const App: React.FC = () => {
 
   const handleMouseDown = (e: React.MouseEvent) => {
     if (activeTab !== 'graph') return;
+    if (contextMenu?.open) setContextMenu(null);
+
     if (e.button === 1) {
       e.preventDefault();
       setPanning(true);
@@ -418,6 +431,13 @@ const App: React.FC = () => {
             }
         }
     }
+  };
+
+  const handleContextMenu = (e: React.MouseEvent) => {
+      if (activeTab !== 'graph') return;
+      e.preventDefault();
+      setContextSearch('');
+      setContextMenu({ x: e.clientX, y: e.clientY, open: true });
   };
 
   const handleMouseMove = (e: React.MouseEvent) => {
@@ -487,6 +507,9 @@ const App: React.FC = () => {
 
   const handleWheel = (e: React.WheelEvent) => {
     if (activeTab !== 'graph') return;
+    // Disable zoom if context menu is open
+    if (contextMenu?.open) return;
+    
     e.stopPropagation();
     const newZoom = Math.max(0.1, Math.min(3, viewport.zoom - e.deltaY * 0.001));
     setViewport(prev => ({ ...prev, zoom: newZoom }));
@@ -494,6 +517,7 @@ const App: React.FC = () => {
 
   const handleNodeMouseDown = (e: React.MouseEvent, id: string) => {
     e.stopPropagation();
+    if (contextMenu?.open) setContextMenu(null);
     if (e.ctrlKey) {
         const newSet = new Set(selectedNodeIds);
         if (newSet.has(id)) newSet.delete(id); else newSet.add(id);
@@ -561,17 +585,34 @@ const App: React.FC = () => {
     }));
   };
 
-  const addNode = (type: NodeType) => {
+  const addNode = (type: NodeType, clientX?: number, clientY?: number) => {
     const def = NODE_DEFINITIONS[type];
+    
+    // Determine position: Mouse Pos or Center Screen
+    let x = 0;
+    let y = 0;
+    
+    if (clientX !== undefined && clientY !== undefined && canvasRef.current) {
+        const rect = canvasRef.current.getBoundingClientRect();
+        x = (clientX - rect.left - viewport.x) / viewport.zoom;
+        y = (clientY - rect.top - viewport.y) / viewport.zoom;
+    } else {
+        x = (-viewport.x + window.innerWidth/2) / viewport.zoom - 50;
+        y = (-viewport.y + window.innerHeight/2) / viewport.zoom - 50;
+    }
+
     const newNode: ShaderNode = {
       id: `${type}-${Date.now()}`,
       ...def,
-      x: (-viewport.x + window.innerWidth/2) / viewport.zoom - 50,
-      y: (-viewport.y + window.innerHeight/2) / viewport.zoom - 50,
+      x: x,
+      y: y,
       data: { value: type === 'color' ? '#ffffff' : type === 'float' ? 0.5 : undefined }
     };
     if (type === 'remap') newNode.data.inputValues = { inMinMax: { x: -1, y: 1 }, outMinMax: { x: 0, y: 1 } };
     setNodes(prev => [...prev, newNode]);
+    
+    // Close context menu if open
+    setContextMenu(null);
   };
 
   const deleteConnection = (id: string) => {
@@ -666,9 +707,9 @@ const App: React.FC = () => {
   };
 
   const allNodeKeys = Object.keys(NODE_DEFINITIONS).filter(k => k !== 'output');
-  const filteredNodeKeys = allNodeKeys.filter(key => {
+  const contextFilteredNodes = allNodeKeys.filter(key => {
      const label = NODE_DEFINITIONS[key as NodeType].label.toLowerCase();
-     return label.includes(searchQuery.toLowerCase());
+     return label.includes(contextSearch.toLowerCase());
   });
 
   return (
@@ -703,28 +744,14 @@ const App: React.FC = () => {
       <div className={`w-full h-full absolute inset-0 flex flex-col ${activeTab === 'graph' ? 'z-10' : 'z-0 invisible'}`}>
         <div className="absolute inset-0 w-full h-full graph-grid z-0 pointer-events-none opacity-50" />
         <GlobalCanvas />
-        <div className={`absolute top-4 left-4 z-20 flex flex-col gap-4 w-64 pointer-events-none h-[calc(100vh-6rem)] ${activeTab === 'graph' ? 'opacity-100' : 'opacity-0'}`}>
-         <div className="bg-[#1e1e1e] border border-gray-700 p-4 rounded-xl shadow-2xl pointer-events-auto flex flex-col max-h-[70vh]">
-            <div className="relative mb-3 shrink-0">
-               <Search className="absolute left-2 top-2.5 h-3.5 w-3.5 text-gray-500" />
-               <input type="text" placeholder="Search nodes..." className="w-full bg-black border border-gray-700 rounded pl-8 pr-2 py-1.5 text-xs text-white focus:border-blue-500 outline-none placeholder-gray-600 transition-colors focus:bg-gray-900" value={searchQuery} onChange={e => setSearchQuery(e.target.value)} />
-            </div>
-            <div className="overflow-y-auto pr-2 space-y-2 mb-4 scrollbar-thin">
-               <div className="grid grid-cols-2 gap-2">
-                 {filteredNodeKeys.length > 0 ? (
-                   filteredNodeKeys.map(type => (
-                     <button key={type} onClick={() => addNode(type as NodeType)} className="flex items-center gap-2 bg-gray-800 hover:bg-gray-700 text-[10px] text-gray-300 p-2 rounded transition-colors truncate border border-transparent hover:border-gray-600" title={NODE_DEFINITIONS[type as NodeType].label}>
-                       <Plus className="w-3 h-3 shrink-0 opacity-50" /> <span className="truncate">{NODE_DEFINITIONS[type as NodeType].label}</span>
-                     </button>
-                   ))
-                 ) : ( <div className="col-span-2 text-center text-xs text-gray-600 py-4">No nodes found</div> )}
-               </div>
-            </div>
-            <div className="flex gap-2 border-t border-gray-700 pt-3 mb-2 shrink-0">
-              <button onClick={() => setPromptOpen(!promptOpen)} className="flex-1 bg-indigo-600 hover:bg-indigo-700 text-white text-xs py-2 rounded flex justify-center items-center gap-2 transition-colors"> <Wand2 className="w-3 h-3" /> AI Assist </button>
-              <button onClick={deleteSelected} disabled={selectedNodeIds.size === 0} className="bg-red-900/50 hover:bg-red-900 text-red-200 p-2 rounded disabled:opacity-50 transition-colors"> <Trash2 className="w-4 h-4" /> </button>
+        <div className={`absolute top-4 left-4 z-20 flex flex-col gap-4 w-64 pointer-events-none ${activeTab === 'graph' ? 'opacity-100' : 'opacity-0'}`}>
+         {/* Tools Toolbar */}
+         <div className="bg-[#1e1e1e] border border-gray-700 p-2 rounded-xl shadow-2xl pointer-events-auto flex flex-col shrink-0">
+            <div className="flex gap-2 shrink-0">
+              <button onClick={() => setPromptOpen(!promptOpen)} className="flex-1 bg-indigo-600 hover:bg-indigo-700 text-white text-xs py-2 rounded flex justify-center items-center gap-2 transition-colors shadow-lg"> <Wand2 className="w-3 h-3" /> AI Assist </button>
             </div>
          </div>
+         {/* AI Prompt Window */}
          {promptOpen && (
            <div className="bg-[#1e1e1e] border border-indigo-500 p-4 rounded-xl shadow-2xl pointer-events-auto animate-in slide-in-from-left-10 fade-in duration-200 shrink-0">
              <textarea className="w-full bg-black border border-gray-700 rounded p-2 text-xs text-white mb-2 focus:outline-none focus:border-indigo-500" placeholder="Describe a shader..." rows={3} value={promptText} onChange={e => setPromptText(e.target.value)} />
@@ -771,6 +798,7 @@ const App: React.FC = () => {
           onMouseDown={handleMouseDown}
           onMouseMove={handleMouseMove}
           onMouseUp={handleMouseUp}
+          onContextMenu={handleContextMenu}
           onWheel={handleWheel}
         >
           <div className="absolute origin-top-left transition-transform duration-75 ease-linear" style={{ transform: `translate(${viewport.x}px, ${viewport.y}px) scale(${viewport.zoom})` }}>
@@ -807,8 +835,43 @@ const App: React.FC = () => {
           )}
           
           <div className="absolute bottom-4 left-4 text-gray-500 text-xs pointer-events-none z-30">
-            Middle Click: Pan • Ctrl+Click: Multi-Select • Drag: Box Select • Wheel: Zoom • Ctrl+S: Save • Ctrl+O: Open
+            Right Click: Add Node • Middle Click: Pan • Ctrl+Click: Multi-Select • Ctrl+S: Save
           </div>
+          
+          {/* Context Menu */}
+          {contextMenu && contextMenu.open && (
+             <div 
+                className="absolute bg-[#1e1e1e] border border-gray-600 rounded shadow-2xl w-48 flex flex-col overflow-hidden z-[100]"
+                style={{ left: contextMenu.x, top: contextMenu.y }}
+                onClick={(e) => e.stopPropagation()}
+                onMouseDown={(e) => e.stopPropagation()}
+             >
+                <div className="p-2 border-b border-gray-700 bg-[#252525]">
+                    <input 
+                        ref={contextMenuRef}
+                        className="w-full bg-black border border-gray-600 rounded px-2 py-1 text-xs text-white outline-none focus:border-blue-500"
+                        placeholder="Search Node..."
+                        value={contextSearch}
+                        onChange={(e) => setContextSearch(e.target.value)}
+                    />
+                </div>
+                <div className="max-h-60 overflow-y-auto scrollbar-thin">
+                   {contextFilteredNodes.length > 0 ? (
+                       contextFilteredNodes.map(type => (
+                         <button 
+                            key={type} 
+                            onClick={() => addNode(type as NodeType, contextMenu.x, contextMenu.y)} 
+                            className="w-full text-left px-3 py-1.5 text-xs text-gray-300 hover:bg-blue-600 hover:text-white transition-colors"
+                         >
+                            {NODE_DEFINITIONS[type as NodeType].label}
+                         </button>
+                       ))
+                   ) : (
+                       <div className="text-center text-[10px] text-gray-500 py-2">No results</div>
+                   )}
+                </div>
+             </div>
+          )}
         </div>
       </div>
       <div className={`w-full h-full absolute inset-0 bg-[#0a0a0a] ${activeTab === 'scene' ? 'z-10' : 'z-0 invisible'}`}>

@@ -1,5 +1,6 @@
 
 
+
 // WebGL Boilerplate Utilities
 
 export const createWebGLContext = (canvas: HTMLCanvasElement): WebGLRenderingContext | null => {
@@ -17,6 +18,15 @@ export const createWebGLContext = (canvas: HTMLCanvasElement): WebGLRenderingCon
     // In strict mode we could check for null return here
     gl.getExtension('OES_standard_derivatives');
     gl.getExtension('EXT_shader_texture_lod');
+    
+    // Enable Anisotropic Filtering for sharper textures at angles
+    const extAniso = gl.getExtension('EXT_texture_filter_anisotropic') || 
+                     gl.getExtension('MOZ_EXT_texture_filter_anisotropic') || 
+                     gl.getExtension('WEBKIT_EXT_texture_filter_anisotropic');
+    
+    // Store extension on the context object for later use if needed, 
+    // mostly implicitly used in applyTextureParams via gl check
+    (gl as any)._extAniso = extAniso;
 
     // GLOBAL CONFIGURATION
     gl.enable(gl.DEPTH_TEST);
@@ -89,10 +99,14 @@ const resizeToPOT = (image: HTMLImageElement): HTMLImageElement | HTMLCanvasElem
     if (isPowerOfTwo(w) && isPowerOfTwo(h)) return image;
 
     const canvas = document.createElement('canvas');
-    canvas.width = Math.pow(2, Math.round(Math.log(w) / Math.LN2));
-    canvas.height = Math.pow(2, Math.round(Math.log(h) / Math.LN2));
+    // UPDATED: Use ceil instead of round to prefer upscaling (better quality) over downscaling
+    canvas.width = Math.pow(2, Math.ceil(Math.log(w) / Math.LN2));
+    canvas.height = Math.pow(2, Math.ceil(Math.log(h) / Math.LN2));
     const ctx = canvas.getContext('2d');
     if (ctx) {
+        // High quality scaling
+        ctx.imageSmoothingEnabled = true;
+        ctx.imageSmoothingQuality = 'high';
         ctx.drawImage(image, 0, 0, canvas.width, canvas.height);
         return canvas;
     }
@@ -126,7 +140,6 @@ export const applyTextureParams = (gl: WebGLRenderingContext, tex: WebGLTexture,
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, wrap);
 
     // Filter
-    // We use Mipmaps for Linear/Trilinear usually
     if (filterStr === 'Point') {
         gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
         gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
@@ -134,6 +147,18 @@ export const applyTextureParams = (gl: WebGLRenderingContext, tex: WebGLTexture,
         // Linear or Trilinear
         gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
         gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+        
+        // Apply Anisotropic Filtering if available and we are using Linear filtering
+        const ext = (gl as any)._extAniso || 
+                    gl.getExtension('EXT_texture_filter_anisotropic') || 
+                    gl.getExtension('MOZ_EXT_texture_filter_anisotropic') || 
+                    gl.getExtension('WEBKIT_EXT_texture_filter_anisotropic');
+                    
+        if (ext) {
+            const max = gl.getParameter(ext.MAX_TEXTURE_MAX_ANISOTROPY_EXT);
+            // Use maximum anisotropy available (usually 16)
+            gl.texParameterf(gl.TEXTURE_2D, ext.TEXTURE_MAX_ANISOTROPY_EXT, max);
+        }
     }
 };
 
@@ -150,6 +175,7 @@ export const loadTexture = (gl: WebGLRenderingContext, src: string, wrap?: strin
     }
 
     const img = new Image();
+    img.crossOrigin = "Anonymous"; // Ensure cross-origin loading works for external URLs
     img.onload = () => {
         // Ensure context is not lost before binding
         if (gl.isContextLost()) return;
