@@ -401,20 +401,38 @@ const processGraph = (nodes: ShaderNode[], connections: Connection[], targetNode
         if (node) {
             let resultVar = 'vec3(1.0, 0.0, 1.0)';
 
-            if (variables[`${targetNodeId}_out`]) {
-                resultVar = castTo(variables[`${targetNodeId}_out`].name, variables[`${targetNodeId}_out`].type, 'vec3');
-            } else if (variables[`${targetNodeId}_rgba`]) {
-                resultVar = castTo(variables[`${targetNodeId}_rgba`].name, 'vec4', 'vec3');
-            } else if (variables[`${targetNodeId}_rgb`]) {
-                resultVar = variables[`${targetNodeId}_rgb`].name;
-            } else if (variables[`${targetNodeId}_r`]) {
-                const r = variables[`${targetNodeId}_r`].name;
-                resultVar = `vec3(${r})`;
+            const varDef = variables[`${targetNodeId}_out`] || variables[`${targetNodeId}_rgba`] || variables[`${targetNodeId}_rgb`] || variables[`${targetNodeId}_r`];
+            const resultType = varDef?.type || 'vec3';
+
+            if (varDef) {
+                // Cast the found variable to vec3 for display
+                if (resultType === 'vec4') {
+                    resultVar = castTo(varDef.name, 'vec4', 'vec3');
+                } else if (resultType === 'float') {
+                    resultVar = `vec3(${varDef.name})`;
+                } else if (resultType.startsWith('mat')) {
+                    // Extract first component for previewing matrices
+                    resultVar = castTo(varDef.name, resultType, 'vec3');
+                } else {
+                    resultVar = varDef.name; // Already vec3 or color
+                }
+            }
+
+            // Detection of Vector types vs Color/Scalar for remapping
+            const isVectorPreview = resultType.startsWith('vec') && resultType !== 'color';
+
+            let previewResult;
+            if (isVectorPreview) {
+                // Remap [-1, 1] to [0, 1] for vectors to match Unity/Standard graph tools
+                previewResult = `(${resultVar} * 0.5 + 0.5)`;
+            } else {
+                // Keep colors and scalars in [0, 1] range clamped
+                previewResult = `max(${resultVar}, 0.0)`;
             }
 
             // Apply Gamma Correction to Preview (Linear -> sRGB)
             // 1/2.2 approx 0.4545
-            finalAssignment = `gl_FragColor = vec4(pow(max(${resultVar}, 0.0), vec3(0.4545)), 1.0);`;
+            finalAssignment = `gl_FragColor = vec4(pow(${previewResult}, vec3(0.4545)), 1.0);`;
         }
     } else if (mode === 'fragment') {
         const master = nodes.find(n => n.type === 'output');

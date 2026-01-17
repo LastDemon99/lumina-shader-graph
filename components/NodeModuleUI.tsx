@@ -296,30 +296,28 @@ export const NodeModuleUI: React.FC<NodeModuleUIProps> = ({ ui, node, allConnect
             }}
           />
 
-          <div className="w-full aspect-square bg-[#0a0a0a] border border-gray-700 rounded relative group overflow-hidden flex items-center justify-center">
-            {isLoadingTexture ? (
-              <div className="flex flex-col items-center gap-1">
-                <Loader2 className="w-5 h-5 animate-spin text-blue-500" />
-                <span className="text-[9px] text-gray-400">Loading...</span>
-              </div>
-            ) : resolved ? (
-              <div className="w-full h-full relative">
-                <img src={resolved} className="w-full h-full object-cover" alt="texture" />
-              </div>
-            ) : (
-              <div className="text-[9px] text-gray-600 text-center px-2">No Texture</div>
+          <div className="flex flex-col gap-1.5">
+            {control.label && (
+              <span className="text-[9px] text-gray-500 font-semibold uppercase tracking-wider">{control.label}</span>
             )}
-
-            <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center z-10">
-              <button
-                className="bg-gray-200 text-black p-1.5 rounded-full hover:bg-white shadow-lg transform scale-95 group-hover:scale-100 transition-transform"
-                onClick={() => fileInputRef.current?.click()}
-                onMouseDown={e => e.stopPropagation()}
-                title="Upload Texture"
-              >
-                <Upload className="w-4 h-4" />
-              </button>
-            </div>
+            <button
+              className={`w-full py-1.5 px-3 rounded border flex items-center justify-center gap-2 transition-all ${resolved
+                ? 'bg-blue-600/20 border-blue-500/50 text-blue-400 hover:bg-blue-600/30 shadow-sm'
+                : 'bg-[#0a0a0a] border-gray-700 text-gray-400 hover:border-gray-500 hover:text-white'
+                }`}
+              onClick={() => fileInputRef.current?.click()}
+              onMouseDown={e => e.stopPropagation()}
+              disabled={isLoadingTexture}
+            >
+              {isLoadingTexture ? (
+                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+              ) : (
+                <Upload className="w-3.5 h-3.5" />
+              )}
+              <span className="text-[10px] font-semibold uppercase tracking-wider">
+                {isLoadingTexture ? 'Loading...' : resolved ? 'Change Texture' : 'Load Texture'}
+              </span>
+            </button>
           </div>
         </div>
       );
@@ -378,7 +376,7 @@ export const NodeModuleUI: React.FC<NodeModuleUIProps> = ({ ui, node, allConnect
             </button>
           </div>
 
-          <div className="grid grid-cols-4 gap-1 max-h-32 overflow-y-auto scrollbar-thin bg-black/20 p-1 rounded">
+          <div className="grid grid-cols-5 gap-1 max-h-32 overflow-y-auto scrollbar-thin bg-black/20 p-1 rounded">
             {layers.map((layerSrc, idx) => (
               <div key={idx} className="relative group aspect-square border border-gray-700 rounded overflow-hidden">
                 <img src={layerSrc} className="w-full h-full object-cover" alt={`layer-${idx}`} />
@@ -395,7 +393,7 @@ export const NodeModuleUI: React.FC<NodeModuleUIProps> = ({ ui, node, allConnect
               </div>
             ))}
             {layers.length === 0 && (
-              <div className="col-span-4 text-[9px] text-gray-600 text-center py-4 border border-dashed border-gray-700 rounded">
+              <div className="col-span-5 text-[9px] text-gray-600 text-center py-4 border border-dashed border-gray-700 rounded">
                 No textures loaded.<br />Same size required.
               </div>
             )}

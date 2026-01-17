@@ -30,8 +30,25 @@ export const texture2DArrayAssetNode: NodeModule = {
     textureAsset: undefined,
   }),
   glsl: {
-    emit: () => {
-      // Source node only; samplers are declared/used by texture sampling nodes.
+    emit: ctx => {
+      const texUniform = ctx.getTextureUniformName?.(ctx.id);
+      const v = ctx.varName(ctx.id);
+      const layerCount = Math.max(1, ctx.node.data.layerCount || 1);
+
+      if (!texUniform) {
+        ctx.body.push(`vec4 ${v} = vec4(0.0);`);
+        ctx.variables[`${ctx.id}_out`] = { name: v, type: 'vec4' };
+        return true;
+      }
+
+      ctx.uniforms.add(`uniform sampler2D ${texUniform};`);
+      // Sample first layer for preview
+      ctx.body.push(
+        `vec2 ${v}_uv = vec2(vUv.x, (fract(vUv.y) + ${layerCount.toFixed(1)} - 1.0) / ${layerCount.toFixed(1)});`,
+      );
+      ctx.body.push(`vec4 ${v} = texture2D(${texUniform}, ${v}_uv);`);
+
+      ctx.variables[`${ctx.id}_out`] = { name: v, type: 'vec4' };
       return true;
     },
   },

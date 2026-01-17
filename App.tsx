@@ -566,13 +566,13 @@ const App: React.FC = () => {
     if (sourceType === targetType) return true;
 
     // Strict blocking for critical types to prevent illegal shader operations (like vec4 * mat3)
-    const strictTypes = ['texture', 'textureArray', 'sampler', 'gradient', 'samplerState', 'mat2', 'mat3', 'mat4'];
+    const strictTypes = ['texture', 'textureArray', 'sampler', 'gradient', 'samplerState'];
     if (strictTypes.includes(sourceType) || strictTypes.includes(targetType)) {
       return sourceType === targetType;
     }
 
-    // Allow general vector/float conversions (handled downstream by castTo)
-    const vectorTypes = ['float', 'vec2', 'vec3', 'vec4', 'color'];
+    // Allow general vector/float/matrix conversions (handled downstream by castTo)
+    const vectorTypes = ['float', 'vec2', 'vec3', 'vec4', 'color', 'mat2', 'mat3', 'mat4'];
     if (vectorTypes.includes(sourceType) && vectorTypes.includes(targetType)) {
       return true;
     }
