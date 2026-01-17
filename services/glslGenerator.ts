@@ -35,6 +35,15 @@ const COMMON_HEADER = `
   #define PI 3.14159265359
   #define TAU 6.28318530718
 
+  // Transpose Polyfill
+  mat3 transpose(mat3 m) {
+    return mat3(
+      m[0].x, m[1].x, m[2].x,
+      m[0].y, m[1].y, m[2].y,
+      m[0].z, m[1].z, m[2].z
+    );
+  }
+  
   // Texture LOD Polyfill/Macro for Fragment Shader
   #ifdef GL_EXT_shader_texture_lod
     #define texture2D_LOD(sampler, coord, lod) texture2DLodEXT(sampler, coord, lod)

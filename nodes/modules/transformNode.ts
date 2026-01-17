@@ -92,6 +92,7 @@ export const transformNode: NodeModule = {
 
       let currentPos = input;
 
+      // 1. Convert FROM source space TO World Space
       if (from === 'Object') {
         if (type === 'Position') currentPos = `(u_model * vec4(${currentPos}, 1.0)).xyz`;
         else currentPos = `mat3(u_model) * ${currentPos}`;
@@ -100,10 +101,16 @@ export const transformNode: NodeModule = {
         else currentPos = `mat3(u_view_inv) * ${currentPos}`;
       } else if (from === 'Tangent') {
         if (type !== 'Position') {
+          // Tangent to World = TBN * Vector
           currentPos = `${v}_TBN * ${currentPos}`;
         }
+      } else if (from === 'Absolute World') {
+        // Absolute World and World are identical in this simple setup
+      } else if (from === 'Screen') {
+        // Placeholder for screen space inverse
       }
 
+      // 2. Convert FROM World Space TO target space
       if (to === 'Object') {
         if (type === 'Position') currentPos = `(u_model_inv * vec4(${currentPos}, 1.0)).xyz`;
         else currentPos = `mat3(u_model_inv) * ${currentPos}`;
@@ -112,7 +119,14 @@ export const transformNode: NodeModule = {
         else currentPos = `mat3(u_view) * ${currentPos}`;
       } else if (to === 'Tangent') {
         if (type !== 'Position') {
-          currentPos = `((${currentPos}).xyz * ${v}_TBN)`;
+          // World to Tangent = Transpose(TBN) * Vector 
+          currentPos = `transpose(${v}_TBN) * ${currentPos}`;
+        }
+      } else if (to === 'Absolute World') {
+        // World to Absolute World = Identity
+      } else if (to === 'Screen') {
+        if (type === 'Position') {
+          currentPos = `((u_projection * u_view * vec4(${currentPos}, 1.0)).xy / (u_projection * u_view * vec4(${currentPos}, 1.0)).w) * 0.5 + 0.5`;
         }
       }
 
