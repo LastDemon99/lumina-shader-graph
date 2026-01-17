@@ -112,7 +112,7 @@ export const transformNode: NodeModule = {
         else currentPos = `mat3(u_view) * ${currentPos}`;
       } else if (to === 'Tangent') {
         if (type !== 'Position') {
-          currentPos = `${currentPos} * ${v}_TBN`;
+          currentPos = `((${currentPos}).xyz * ${v}_TBN)`;
         }
       }
 

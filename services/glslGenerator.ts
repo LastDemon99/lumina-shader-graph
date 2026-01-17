@@ -203,6 +203,11 @@ const castTo = (varName: string, from: string, to: string): string => {
     if (t === 'mat3' && f === 'mat4') return `mat3(${varName})`;
     if (t === 'mat4' && f === 'mat3') return `mat4(${varName})`;
 
+    // Safe component extraction when casting Matrix/Vector to a different Vector dimension
+    if ((t === 'vec3' || t === 'color') && f.startsWith('mat')) return `(${varName}[0])`;
+    if (t === 'vec4' && f.startsWith('mat')) return `vec4(${varName}[0], 1.0)`;
+    if (f === 'vec4' && (t === 'mat3' || t === 'vec3' || t === 'color')) return `${varName}.xyz`;
+
     return varName; // Fallback
 };
 
@@ -316,21 +321,36 @@ const processGraph = (nodes: ShaderNode[], connections: Connection[], targetNode
 
     // Helper to determine dynamic type for Math Nodes based on connections
     const getDynamicType = (nodeId: string, inputs: string[]): SocketType => {
-        let highestRank = 0; // 0=float, 1=vec2, 2=vec3, 3=vec4
+        let maxVecRank = 0;
+        let maxMatRank = 0;
 
         inputs.forEach(socketId => {
             const conn = connections.find(c => c.targetNodeId === nodeId && c.targetSocketId === socketId);
             if (conn) {
                 const srcType = variables[`${conn.sourceNodeId}_${conn.sourceSocketId}`]?.type;
-                if (srcType === 'vec4') highestRank = Math.max(highestRank, 3);
-                else if (srcType === 'vec3' || srcType === 'color') highestRank = Math.max(highestRank, 2);
-                else if (srcType === 'vec2') highestRank = Math.max(highestRank, 1);
+                if (srcType === 'vec4') maxVecRank = Math.max(maxVecRank, 3);
+                else if (srcType === 'vec3' || srcType === 'color') maxVecRank = Math.max(maxVecRank, 2);
+                else if (srcType === 'vec2') maxVecRank = Math.max(maxVecRank, 1);
+                else if (srcType === 'mat4') maxMatRank = Math.max(maxMatRank, 3);
+                else if (srcType === 'mat3') maxMatRank = Math.max(maxMatRank, 2);
+                else if (srcType === 'mat2') maxMatRank = Math.max(maxMatRank, 1);
             }
         });
 
-        if (highestRank === 3) return 'vec4';
-        if (highestRank === 2) return 'vec3';
-        if (highestRank === 1) return 'vec2';
+        // Vectors take precedence in math node output typing (e.g. vec4 * mat4 -> vec4)
+        if (maxVecRank > 0) {
+            if (maxVecRank === 3) return 'vec4';
+            if (maxVecRank === 2) return 'vec3';
+            return 'vec2';
+        }
+
+        // Only return matrix type if NO vectors are involved (e.g. mat3 * mat3 -> mat3)
+        if (maxMatRank > 0) {
+            if (maxMatRank === 3) return 'mat4';
+            if (maxMatRank === 2) return 'mat3';
+            return 'mat2';
+        }
+
         return 'float'; // Default if only floats or disconnected
     };
 
