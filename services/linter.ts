@@ -1,6 +1,7 @@
 
 import { ShaderNode, Connection, NodeType } from '../types';
 import { NODE_DEFINITIONS } from '../constants';
+import { getNodeModule } from '../nodes';
 
 export const lintGraph = (nodes: ShaderNode[], connections: Connection[]): string[] => {
   const report: string[] = [];
@@ -14,7 +15,7 @@ export const lintGraph = (nodes: ShaderNode[], connections: Connection[]): strin
 
   // 2. Connectivity Checks
   nodes.forEach(node => {
-    const def = NODE_DEFINITIONS[node.type as NodeType];
+    const def = (getNodeModule(node.type)?.definition ?? NODE_DEFINITIONS[node.type as NodeType]) as any;
     if (!def) return;
 
     // Check Inputs

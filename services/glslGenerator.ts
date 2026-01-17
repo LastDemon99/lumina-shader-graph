@@ -1,4 +1,5 @@
 import { ShaderNode, Connection, NodeType, SocketType, GradientStop } from '../types';
+import { getNodeModule } from '../nodes';
 
 // Helper to determine required extensions based on used nodes
 const getRequiredExtensions = (nodes: ShaderNode[], mode: 'fragment' | 'vertex'): string => {
@@ -337,6 +338,26 @@ const processGraph = (nodes: ShaderNode[], connections: Connection[], targetNode
       const id = node.id;
       
       try {
+        const nodeModule = getNodeModule(node.type);
+        const handledByModule = nodeModule?.glsl?.emit?.({
+            id,
+            node,
+            mode,
+            body,
+            uniforms,
+            functions,
+            variables,
+            getInput,
+            getDynamicType: (inputSocketIds: string[]) => getDynamicType(id, inputSocketIds),
+            varName,
+            castTo,
+            toGLSL,
+        });
+
+        if (handledByModule) {
+            continue;
+        }
+
         switch (node.type) {
             case 'remap': {
                 const i = getInput(id, 'in', 'vec3(0.0)', 'vec3');
@@ -730,16 +751,6 @@ const processGraph = (nodes: ShaderNode[], connections: Connection[], targetNode
                 variables[`${id}_out`] = { name: v, type: 'vec3' };
                 break;
             }
-            case 'remap': {
-                 const i = getInput(id, 'in', 'vec3(0.0)', 'vec3');
-                 const inMM = getInput(id, 'inMinMax', 'vec2(-1.0, 1.0)', 'vec2');
-                 const outMM = getInput(id, 'outMinMax', 'vec2(0.0, 1.0)', 'vec2');
-                 const v = varName(id);
-                 body.push(`vec3 ${v}_t = (${i} - ${inMM}.x) / (${inMM}.y - ${inMM}.x + 0.00001);`);
-                 body.push(`vec3 ${v} = mix(vec3(${outMM}.x), vec3(${outMM}.y), ${v}_t);`);
-                 variables[`${id}_out`] = { name: v, type: 'vec3' };
-                 break;
-             }
             case 'maximum': {
                 const a = getInput(id, 'a', '0.0', 'float');
                 const b = getInput(id, 'b', '0.0', 'float');

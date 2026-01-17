@@ -9,6 +9,7 @@ import { geminiService } from './services/geminiService';
 import { lintGraph } from './services/linter';
 import { ShaderNode, Connection, Viewport, NodeType, SocketType } from './types';
 import { INITIAL_NODES, NODE_DEFINITIONS, INITIAL_CONNECTIONS } from './constants';
+import { NODE_REGISTRY, getNodeModule } from './nodes';
 import { Wand2, Download, Upload, ZoomIn, ZoomOut, MousePointer2, Box, Square, Save, Layers, Network, CheckCircle2, Loader2, Sparkles, FileJson, AlertCircle, Plus } from 'lucide-react';
 
 const App: React.FC = () => {
@@ -534,6 +535,13 @@ const App: React.FC = () => {
     setConnecting({ nodeId, socketId, isInput, type, x: e.clientX, y: e.clientY });
   };
 
+  const getMaxConnectionsForInput = (targetNodeId: string, targetSocketId: string): number => {
+      const targetNode = nodes.find(n => n.id === targetNodeId);
+      if (!targetNode) return 1;
+      const rule = getNodeModule(targetNode.type)?.socketRules?.inputs?.[targetSocketId];
+      return rule?.maxConnections ?? 1;
+  };
+
   const isTypeCompatible = (sourceType: SocketType, targetType: SocketType) => {
       if (sourceType === 'textureArray' && targetType !== 'textureArray') return false;
       if (targetType === 'textureArray' && sourceType !== 'textureArray') return false;
@@ -560,7 +568,10 @@ const App: React.FC = () => {
       };
 
       setConnections(prev => {
-        const filtered = prev.filter(c => c.targetNodeId !== target.nodeId || c.targetSocketId !== target.socketId);
+        const maxConnections = getMaxConnectionsForInput(target.nodeId, target.socketId);
+        const filtered = maxConnections === 1
+          ? prev.filter(c => c.targetNodeId !== target.nodeId || c.targetSocketId !== target.socketId)
+          : prev;
         return [...filtered, newConnection];
       });
     }
@@ -570,23 +581,16 @@ const App: React.FC = () => {
   const updateNodeData = (id: string, data: any) => {
     setNodes(prev => prev.map(n => {
         if (n.id === id) {
-            const newNode = { ...n, data: { ...n.data, ...data } };
-            if (n.type === 'swizzle' && data.mask) {
-                const maskLength = data.mask.length;
-                let newType: SocketType = 'vec4';
-                if (maskLength === 1) newType = 'float';
-                else if (maskLength === 2) newType = 'vec2';
-                else if (maskLength === 3) newType = 'vec3';
-                newNode.outputs = [{ id: 'out', label: `Out(${maskLength})`, type: newType }];
-            }
-            return newNode;
+        return { ...n, data: { ...n.data, ...data } };
         }
         return n;
     }));
   };
 
   const addNode = (type: NodeType, clientX?: number, clientY?: number) => {
-    const def = NODE_DEFINITIONS[type];
+    const mod = getNodeModule(type);
+    const def = (mod?.definition ?? NODE_DEFINITIONS[type]) as any;
+    const id = `${type}-${Date.now()}`;
     
     // Determine position: Mouse Pos or Center Screen
     let x = 0;
@@ -602,11 +606,13 @@ const App: React.FC = () => {
     }
 
     const newNode: ShaderNode = {
-      id: `${type}-${Date.now()}`,
+      id,
       ...def,
       x: x,
       y: y,
-      data: { value: type === 'color' ? '#ffffff' : type === 'float' ? 0.5 : undefined }
+      data: mod?.initialData
+        ? ({ ...(mod.initialData(id) as any) })
+        : ({ value: type === 'color' ? '#ffffff' : type === 'float' ? 0.5 : undefined } as any)
     };
     if (type === 'remap') newNode.data.inputValues = { inMinMax: { x: -1, y: 1 }, outMinMax: { x: 0, y: 1 } };
     setNodes(prev => [...prev, newNode]);
@@ -646,8 +652,8 @@ const App: React.FC = () => {
         setGenerationPhase('idle');
         return;
     }
-    const draftNodes: ShaderNode[] = draft.nodes.map((n: any) => ({
-         ...NODE_DEFINITIONS[n.type as NodeType],
+        const draftNodes: ShaderNode[] = draft.nodes.map((n: any) => ({
+          ...(getNodeModule(n.type)?.definition ?? NODE_DEFINITIONS[n.type as NodeType]),
          id: n.id,
          x: n.x,
          y: n.y,
@@ -660,8 +666,8 @@ const App: React.FC = () => {
     setGenerationPhase('refining');
     const refined = await geminiService.refineGraph(draft, logs);
     if (refined && refined.nodes) {
-        const newNodes: ShaderNode[] = refined.nodes.map((n: any) => ({
-             ...NODE_DEFINITIONS[n.type as NodeType],
+           const newNodes: ShaderNode[] = refined.nodes.map((n: any) => ({
+             ...(getNodeModule(n.type)?.definition ?? NODE_DEFINITIONS[n.type as NodeType]),
              id: n.id,
              x: n.x,
              y: n.y,
@@ -706,9 +712,9 @@ const App: React.FC = () => {
     return <path d={path} stroke="#fff" strokeWidth="3" fill="none" strokeDasharray="5,5" className="pointer-events-none" />;
   };
 
-  const allNodeKeys = Object.keys(NODE_DEFINITIONS).filter(k => k !== 'output');
+    const allNodeKeys = Array.from(new Set([...Object.keys(NODE_DEFINITIONS), ...Object.keys(NODE_REGISTRY)])).filter(k => k !== 'output');
   const contextFilteredNodes = allNodeKeys.filter(key => {
-     const label = NODE_DEFINITIONS[key as NodeType].label.toLowerCase();
+      const label = ((getNodeModule(key)?.definition ?? NODE_DEFINITIONS[key as NodeType]) as any).label.toLowerCase();
      return label.includes(contextSearch.toLowerCase());
   });
 
@@ -863,7 +869,7 @@ const App: React.FC = () => {
                             onClick={() => addNode(type as NodeType, contextMenu.x, contextMenu.y)} 
                             className="w-full text-left px-3 py-1.5 text-xs text-gray-300 hover:bg-blue-600 hover:text-white transition-colors"
                          >
-                            {NODE_DEFINITIONS[type as NodeType].label}
+                             {((getNodeModule(type)?.definition ?? NODE_DEFINITIONS[type as NodeType]) as any).label}
                          </button>
                        ))
                    ) : (

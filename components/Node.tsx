@@ -9,6 +9,9 @@ import { Preview } from './Preview';
 import { generateGLSL } from '../services/glslGenerator';
 import { processTextureFile, createTextureAtlas } from '../services/textureUtils';
 import { Upload, ArrowRight, Box, Square, CheckSquare, Square as SquareIcon, Image as ImageIcon, Loader2, Plus, X, ChevronDown, Check, ChevronUp, Layers, ChevronRight, Trash2 } from 'lucide-react';
+import { getNodeModule } from '../nodes';
+import { getEffectiveSockets } from '../nodes/runtime';
+import { NodeModuleUI } from './NodeModuleUI';
 
 interface NodeProps {
   node: ShaderNode;
@@ -158,9 +161,13 @@ export const Node: React.FC<NodeProps> = ({
     return map;
   }, [allNodes, allConnections]);
 
-  const canShowPreview = !NO_PREVIEW_TYPES.includes(node.type);
-  const isObjectNode = node.type === 'object';
-  const isWide = WIDE_NODE_TYPES.includes(node.type);
+    const nodeModule = getNodeModule(node.type);
+    const registryUi = nodeModule?.ui;
+    const registrySocketRules = nodeModule?.socketRules;
+
+    const canShowPreview = registryUi?.preview ? registryUi.preview.enabled : !NO_PREVIEW_TYPES.includes(node.type);
+    const isObjectNode = node.type === 'object';
+    const isWide = registryUi?.width ? registryUi.width === 'wide' : WIDE_NODE_TYPES.includes(node.type);
 
   const setPreviewMode = (mode: '2d' | '3d') => {
       onUpdateData(node.id, { previewMode: mode });
@@ -605,795 +612,89 @@ export const Node: React.FC<NodeProps> = ({
         )}
         
         {!isNodeCollapsed && (
-            <>
-                {/* GEOMETRY NODES SPACE SELECTOR */}
-                {['position', 'normal', 'tangent', 'bitangent', 'viewDirection', 'viewVector'].includes(node.type) && (
-                    <div className="w-full h-6 rounded border border-gray-700 bg-[#0a0a0a] flex items-center px-1 nodrag mb-1">
-                        <span className="text-[9px] text-gray-500 mr-2">Space</span>
-                        <select 
-                            className="bg-[#0a0a0a] text-[10px] text-white w-full outline-none border-none cursor-pointer"
-                            value={node.data.space || 'World'}
-                            onChange={(e) => onUpdateData(node.id, { space: e.target.value })}
-                            onMouseDown={e => e.stopPropagation()}
-                        >
-                            <option value="World">World</option>
-                            <option value="Object">Object</option>
-                            <option value="View">View</option>
-                            <option value="Tangent">Tangent</option>
-                            {node.type === 'position' && <option value="Absolute World">Absolute World</option>}
-                        </select>
-                    </div>
-                )}
-
-                {/* RECIPROCAL NODE UI */}
-                {node.type === 'reciprocal' && (
-                    <div className="w-full h-6 rounded border border-gray-700 bg-[#0a0a0a] flex items-center px-1 nodrag mb-1">
-                        <span className="text-[9px] text-gray-500 mr-2">Method</span>
-                        <select 
-                            className="bg-[#0a0a0a] text-[10px] text-white w-full outline-none border-none cursor-pointer"
-                            value={node.data.reciprocalMethod || 'Default'}
-                            onChange={(e) => onUpdateData(node.id, { reciprocalMethod: e.target.value })}
-                            onMouseDown={e => e.stopPropagation()}
-                        >
-                            <option value="Default">Default</option>
-                            <option value="Fast">Fast</option>
-                        </select>
-                    </div>
-                )}
-
-                {/* SCREEN POSITION UI */}
-                {node.type === 'screenPosition' && (
-                    <div className="w-full h-6 rounded border border-gray-700 bg-[#0a0a0a] flex items-center px-1 nodrag mb-1">
-                        <span className="text-[9px] text-gray-500 mr-2">Mode</span>
-                        <select 
-                            className="bg-[#0a0a0a] text-[10px] text-white w-full outline-none border-none cursor-pointer"
-                            value={node.data.screenPositionMode || 'Default'}
-                            onChange={(e) => onUpdateData(node.id, { screenPositionMode: e.target.value })}
-                            onMouseDown={e => e.stopPropagation()}
-                        >
-                            <option value="Default">Default</option>
-                            <option value="Raw">Raw</option>
-                            <option value="Center">Center</option>
-                            <option value="Tiled">Tiled</option>
-                            <option value="Pixel">Pixel</option>
-                        </select>
-                    </div>
-                )}
-
-                {/* FLIPBOOK NODE UI */}
-                {node.type === 'flipbook' && (
-                    <div className="flex flex-col gap-1 nodrag mb-1">
-                         <div className="flex items-center justify-between px-1 h-6 bg-[#0a0a0a] border border-gray-700 rounded">
-                            <span className="text-[9px] text-gray-400">Invert X</span>
-                            <button 
-                                onClick={() => onUpdateData(node.id, { invertX: !node.data.invertX })}
-                                onMouseDown={e => e.stopPropagation()}
-                                className="text-gray-400 hover:text-white"
-                            >
-                                {node.data.invertX ? <CheckSquare className="w-3 h-3" /> : <SquareIcon className="w-3 h-3" />}
-                            </button>
-                         </div>
-                         <div className="flex items-center justify-between px-1 h-6 bg-[#0a0a0a] border border-gray-700 rounded">
-                            <span className="text-[9px] text-gray-400">Invert Y</span>
-                            <button 
-                                onClick={() => onUpdateData(node.id, { invertY: !node.data.invertY })}
-                                onMouseDown={e => e.stopPropagation()}
-                                className="text-gray-400 hover:text-white"
-                            >
-                                {node.data.invertY ? <CheckSquare className="w-3 h-3" /> : <SquareIcon className="w-3 h-3" />}
-                            </button>
-                         </div>
-                    </div>
-                )}
-
-                {/* PARALLAX MAPPING UI */}
-                {node.type === 'parallaxMapping' && (
-                    <div className="w-full h-6 rounded border border-gray-700 bg-[#0a0a0a] flex items-center px-1 nodrag mb-1">
-                        <span className="text-[9px] text-gray-500 mr-2 flex-1">Sample Channel</span>
-                        <select 
-                            className="bg-[#0a0a0a] text-[10px] text-white w-14 outline-none border-none cursor-pointer"
-                            value={node.data.parallaxChannel || 'g'}
-                            onChange={(e) => onUpdateData(node.id, { parallaxChannel: e.target.value })}
-                            onMouseDown={e => e.stopPropagation()}
-                        >
-                            <option value="r">Red</option>
-                            <option value="g">Green</option>
-                            <option value="b">Blue</option>
-                            <option value="a">Alpha</option>
-                        </select>
-                    </div>
-                )}
-
-                {/* SCENE DEPTH UI */}
-                {node.type === 'sceneDepth' && (
-                    <div className="w-full h-6 rounded border border-gray-700 bg-[#0a0a0a] flex items-center px-1 nodrag mb-1">
-                        <span className="text-[9px] text-gray-500 mr-2">Sampling</span>
-                        <select 
-                            className="bg-[#0a0a0a] text-[10px] text-white w-full outline-none border-none cursor-pointer"
-                            value={node.data.sceneDepthMode || 'Linear01'}
-                            onChange={(e) => onUpdateData(node.id, { sceneDepthMode: e.target.value })}
-                            onMouseDown={e => e.stopPropagation()}
-                        >
-                            <option value="Linear01">Linear 01</option>
-                            <option value="Raw">Raw</option>
-                            <option value="Eye">Eye</option>
-                        </select>
-                    </div>
-                )}
-
-                {/* SCENE DEPTH DIFFERENCE UI */}
-                {node.type === 'sceneDepthDifference' && (
-                    <div className="w-full h-6 rounded border border-gray-700 bg-[#0a0a0a] flex items-center px-1 nodrag mb-1">
-                        <span className="text-[9px] text-gray-500 mr-2">Sampling Mode</span>
-                        <select 
-                            className="bg-[#0a0a0a] text-[10px] text-white w-full outline-none border-none cursor-pointer"
-                            value={node.data.sceneDepthMode || 'Linear01'}
-                            onChange={(e) => onUpdateData(node.id, { sceneDepthMode: e.target.value })}
-                            onMouseDown={e => e.stopPropagation()}
-                        >
-                            <option value="Linear01">Linear 01</option>
-                            <option value="Raw">Raw</option>
-                            <option value="Eye">Eye</option>
-                        </select>
-                    </div>
-                )}
-
-                {/* TRANSFORM NODE UI */}
-                {node.type === 'transform' && (
-                    <div className="flex flex-col gap-1 nodrag mb-1">
-                        <div className="flex items-center justify-between">
-                            <span className="text-[9px] text-gray-500 w-8">From</span>
-                            <select 
-                                className="bg-[#0a0a0a] border border-gray-700 rounded text-[10px] text-white outline-none h-5 flex-1 w-full cursor-pointer"
-                                value={node.data.transformSpaceFrom || 'Object'}
-                                onChange={(e) => onUpdateData(node.id, { transformSpaceFrom: e.target.value })}
-                                onMouseDown={e => e.stopPropagation()}
-                            >
-                                <option value="Object">Object</option>
-                                <option value="World">World</option>
-                                <option value="View">View</option>
-                                <option value="Tangent">Tangent</option>
-                                <option value="Absolute World">Absolute World</option>
-                                <option value="Screen">Screen</option>
-                            </select>
-                        </div>
-                        <div className="flex items-center justify-between">
-                            <span className="text-[9px] text-gray-500 w-8">To</span>
-                            <select 
-                                className="bg-[#0a0a0a] border border-gray-700 rounded text-[10px] text-white outline-none h-5 flex-1 w-full cursor-pointer"
-                                value={node.data.transformSpaceTo || 'World'}
-                                onChange={(e) => onUpdateData(node.id, { transformSpaceTo: e.target.value })}
-                                onMouseDown={e => e.stopPropagation()}
-                            >
-                                <option value="Object">Object</option>
-                                <option value="World">World</option>
-                                <option value="View">View</option>
-                                <option value="Tangent">Tangent</option>
-                                <option value="Absolute World">Absolute World</option>
-                                <option value="Screen">Screen</option>
-                            </select>
-                        </div>
-                        <div className="flex items-center justify-between">
-                            <span className="text-[9px] text-gray-500 w-8">Type</span>
-                            <select 
-                                className="bg-[#0a0a0a] border border-gray-700 rounded text-[10px] text-white outline-none h-5 flex-1 w-full cursor-pointer"
-                                value={node.data.transformType || 'Position'}
-                                onChange={(e) => onUpdateData(node.id, { transformType: e.target.value })}
-                                onMouseDown={e => e.stopPropagation()}
-                            >
-                                <option value="Position">Position</option>
-                                <option value="Direction">Direction</option>
-                                <option value="Normal">Normal</option>
-                            </select>
-                        </div>
-                    </div>
-                )}
-
-                {/* COLORSPACE CONVERSION UI */}
-                {node.type === 'colorspaceConversion' && (
-                    <div className="flex flex-col gap-1 nodrag mb-1">
-                        <div className="flex items-center justify-between">
-                            <span className="text-[9px] text-gray-500 w-8">From</span>
-                            <select 
-                                className="bg-[#0a0a0a] border border-gray-700 rounded text-[10px] text-white outline-none h-5 flex-1 w-full cursor-pointer"
-                                value={node.data.conversionFrom || 'RGB'}
-                                onChange={(e) => onUpdateData(node.id, { conversionFrom: e.target.value })}
-                                onMouseDown={e => e.stopPropagation()}
-                            >
-                                <option value="RGB">RGB</option>
-                                <option value="Linear">Linear</option>
-                                <option value="HSV">HSV</option>
-                            </select>
-                        </div>
-                        <div className="flex items-center justify-between">
-                            <span className="text-[9px] text-gray-500 w-8">To</span>
-                            <select 
-                                className="bg-[#0a0a0a] border border-gray-700 rounded text-[10px] text-white outline-none h-5 flex-1 w-full cursor-pointer"
-                                value={node.data.conversionTo || 'Linear'}
-                                onChange={(e) => onUpdateData(node.id, { conversionTo: e.target.value })}
-                                onMouseDown={e => e.stopPropagation()}
-                            >
-                                <option value="RGB">RGB</option>
-                                <option value="Linear">Linear</option>
-                                <option value="HSV">HSV</option>
-                            </select>
-                        </div>
-                    </div>
-                )}
-
-                {/* GRADIENT NODE UI */}
-                {node.type === 'gradient' && (
-                    <div className="flex flex-col gap-2 nodrag">
-                        <div className="relative group">
-                            {/* Gradient Bar Container */}
-                            <div 
-                                ref={gradientRef}
-                                className="h-6 w-full rounded border border-gray-600 relative cursor-crosshair overflow-visible bg-[url('data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSI4IiBoZWlnaHQ9IjgiPjxyZWN0IHdpZHRoPSI4IiBoZWlnaHQ9IjgiIGZpbGw9IiM0MDQwNDAiLz48cGF0aCBkPSJNTAgMEw4IDBaIiBmaWxsPSIjNTA1MDUwIi8+PC9zdmc+')] bg-repeat"
-                                onClick={handleGradientClick}
-                                onMouseDown={e => e.stopPropagation()}
-                            >
-                                {/* The visual gradient */}
-                                <div 
-                                    className="absolute inset-0 rounded"
-                                    style={{ background: `linear-gradient(to right, ${generateGradientCSS(getGradientStops())})` }}
-                                />
-                                
-                                {/* Stops */}
-                                {getGradientStops().map(stop => (
-                                    <div 
-                                        key={stop.id}
-                                        className={`absolute top-0 bottom-0 w-0 flex flex-col items-center justify-end z-10 group/stop`}
-                                        style={{ left: `${stop.t * 100}%` }}
-                                        onClick={(e) => { e.stopPropagation(); setActiveStopId(stop.id); }}
-                                    >
-                                        {/* Markers */}
-                                        <div className={`w-3 h-3 -mt-3.5 absolute top-0 transform rotate-180 border-l-[6px] border-r-[6px] border-b-[8px] border-l-transparent border-r-transparent ${activeStopId === stop.id ? 'border-b-blue-500 scale-125' : 'border-b-white'} drop-shadow-md cursor-pointer hover:scale-110 transition-transform`} />
-                                        <div className={`w-3 h-3 -mb-3.5 absolute bottom-0 border-l-[6px] border-r-[6px] border-b-[8px] border-l-transparent border-r-transparent ${activeStopId === stop.id ? 'border-b-blue-500 scale-125' : 'border-b-white'} drop-shadow-md cursor-pointer hover:scale-110 transition-transform`} />
-                                        <div className={`w-0.5 h-full ${activeStopId === stop.id ? 'bg-white' : 'bg-black/50'} `} />
-                                    </div>
-                                ))}
-                            </div>
-                            <div className="absolute top-full w-full text-center text-[9px] text-gray-500 opacity-0 group-hover:opacity-100 pointer-events-none pt-1">
-                                Click bar to add stop
-                            </div>
-                        </div>
-
-                        {/* Active Stop Controls */}
-                        {activeStopId && (() => {
-                            const stop = getGradientStops().find(s => s.id === activeStopId);
-                            if (!stop) return null;
-                            return (
-                                <div className="flex items-center gap-1 bg-[#0a0a0a] border border-gray-700 p-1 rounded animate-in fade-in slide-in-from-top-1">
-                                    <div className="w-6 h-6 rounded border border-gray-600 relative overflow-hidden shrink-0">
-                                        <ThrottledColorInput 
-                                            value={stop.color} 
-                                            onChange={(c) => updateStop(stop.id, { color: c })}
-                                        />
-                                    </div>
-                                    <div className="flex-1 flex items-center bg-gray-900 border border-gray-800 rounded px-1">
-                                        <span className="text-[9px] text-gray-500 mr-1">T</span>
-                                        <input 
-                                            type="number" step="0.01" min="0" max="1"
-                                            className="w-full bg-transparent text-[10px] text-white outline-none h-5 text-right"
-                                            value={stop.t}
-                                            onChange={(e) => updateStop(stop.id, { t: parseFloat(e.target.value) })}
-                                            onMouseDown={e => e.stopPropagation()}
-                                        />
-                                    </div>
-                                    <button 
-                                        className="p-1 text-gray-400 hover:text-red-400 hover:bg-red-900/30 rounded transition-colors"
-                                        onClick={() => removeStop(stop.id)}
-                                        title="Delete Stop"
-                                        onMouseDown={e => e.stopPropagation()}
-                                    >
-                                        <Trash2 className="w-3 h-3" />
-                                    </button>
-                                </div>
-                            );
-                        })()}
-                    </div>
-                )}
-
-                {/* METAL REFLECTANCE UI */}
-                {node.type === 'metalReflectance' && (
-                    <div className="w-full h-6 rounded border border-gray-700 bg-[#0a0a0a] flex items-center px-1 nodrag mb-1">
-                        <span className="text-[9px] text-gray-500 mr-2">Metal</span>
-                        <select 
-                            className="bg-[#0a0a0a] text-[10px] text-white w-full outline-none border-none cursor-pointer"
-                            value={node.data.metalType || 'Iron'}
-                            onChange={(e) => onUpdateData(node.id, { metalType: e.target.value })}
-                            onMouseDown={e => e.stopPropagation()}
-                        >
-                            <option value="Iron">Iron</option>
-                            <option value="Silver">Silver</option>
-                            <option value="Aluminium">Aluminium</option>
-                            <option value="Gold">Gold</option>
-                            <option value="Copper">Copper</option>
-                            <option value="Chromium">Chromium</option>
-                            <option value="Nickel">Nickel</option>
-                            <option value="Titanium">Titanium</option>
-                            <option value="Cobalt">Cobalt</option>
-                            <option value="Platinum">Platinum</option>
-                        </select>
-                    </div>
-                )}
-
-                {/* DIELECTRIC SPECULAR UI */}
-                {node.type === 'dielectricSpecular' && (
-                    <div className="w-full h-6 rounded border border-gray-700 bg-[#0a0a0a] flex items-center px-1 nodrag mb-1">
-                        <span className="text-[9px] text-gray-500 mr-2">Material</span>
-                        <select 
-                            className="bg-[#0a0a0a] text-[10px] text-white w-full outline-none border-none cursor-pointer"
-                            value={node.data.dielectricMaterial || 'Common'}
-                            onChange={(e) => onUpdateData(node.id, { dielectricMaterial: e.target.value })}
-                            onMouseDown={e => e.stopPropagation()}
-                        >
-                            <option value="Common">Common</option>
-                            <option value="RustedMetal">Rusted Metal</option>
-                            <option value="Water">Water</option>
-                            <option value="Ice">Ice</option>
-                            <option value="Glass">Glass</option>
-                            <option value="Custom">Custom</option>
-                        </select>
-                    </div>
-                )}
-
-                {/* GENERIC TEXTURE CONTROLS */}
-                {((node.type === 'texture' || node.type === 'calculateLevelOfDetailTexture' || node.type === 'sampleTexture2DLOD' || node.type === 'gatherTexture2D' || node.type === 'sampleTexture2DArray' || node.type === 'textureSize' || node.type === 'parallaxMapping') || node.type === 'textureAsset') && (
-                   <div className="flex flex-col gap-2 nodrag">
-                     <input 
-                        type="file" 
-                        ref={fileInputRef} 
-                        className="hidden" 
-                        accept="image/png, image/jpeg, image/jpg, image/webp, .tga"
-                        onChange={handleImageUpload}
-                     />
-
-                     {node.type === 'texture' && !isTextureInputConnected && (
-                        <div className="grid grid-cols-2 gap-1 mb-1">
-                            <div className="flex flex-col">
-                                <span className="text-[9px] text-gray-500">Type</span>
-                                <select 
-                                    className="bg-[#0a0a0a] border border-gray-700 rounded text-[10px] text-white outline-none h-5"
-                                    value={node.data.textureType || 'Default'}
-                                    onChange={(e) => onUpdateData(node.id, { textureType: e.target.value })}
-                                    onMouseDown={e => e.stopPropagation()}
-                                >
-                                    <option value="Default">Default</option>
-                                    <option value="Normal">Normal</option>
-                                </select>
-                            </div>
-                            <div className="flex flex-col">
-                                <span className="text-[9px] text-gray-500">Space</span>
-                                <select 
-                                    className="bg-[#0a0a0a] border border-gray-700 rounded text-[10px] text-white outline-none h-5 cursor-pointer"
-                                    value={node.data.space || 'Tangent'}
-                                    onChange={(e) => onUpdateData(node.id, { space: e.target.value })}
-                                    onMouseDown={e => e.stopPropagation()}
-                                >
-                                    <option value="Tangent">Tangent</option>
-                                    <option value="Object">Object</option>
-                                </select>
-                            </div>
-                        </div>
-                     )}
-
-                     {node.type === 'textureAsset' ? (
-                         <div className="w-full aspect-square bg-[#0a0a0a] border border-gray-700 rounded relative group overflow-hidden flex items-center justify-center">
-                             {isLoadingTexture ? (
-                                 <div className="flex flex-col items-center gap-1">
-                                    <Loader2 className="w-5 h-5 animate-spin text-blue-500"/>
-                                    <span className="text-[9px] text-gray-400">Loading...</span>
-                                 </div>
-                             ) : resolvedTexture ? (
-                                 <div className="w-full h-full relative">
-                                     <img src={resolvedTexture} className="w-full h-full object-cover" alt="texture" />
-                                 </div>
-                             ) : (
-                                 <div className="text-[9px] text-gray-600 text-center px-2">No Texture</div>
-                             )}
-                             
-                             <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center z-10">
-                                 <button 
-                                     className="bg-gray-200 text-black p-1.5 rounded-full hover:bg-white shadow-lg transform scale-95 group-hover:scale-100 transition-transform"
-                                     onClick={() => fileInputRef.current?.click()}
-                                     onMouseDown={e => e.stopPropagation()}
-                                     title="Upload Texture (PNG, JPG, TGA)"
-                                 >
-                                     <Upload className="w-4 h-4" />
-                                 </button>
-                             </div>
-                         </div>
-                     ) : (
-                         !isTextureInputConnected && node.type !== 'sampleTexture2DArray' && (
-                            <div className="flex flex-col gap-1">
-                                <div className="flex items-center justify-between bg-[#0a0a0a] border border-gray-700 rounded p-1">
-                                   <span className="text-[9px] text-gray-500 pl-1 flex items-center gap-1"><ImageIcon className="w-3 h-3"/> Source</span>
-                                   <button 
-                                        className="bg-gray-800 hover:bg-gray-700 text-[9px] text-gray-200 px-2 py-0.5 rounded border border-gray-600 transition-colors disabled:opacity-50"
-                                        onClick={() => fileInputRef.current?.click()}
-                                        onMouseDown={e => e.stopPropagation()}
-                                        disabled={isLoadingTexture}
-                                   >
-                                       {isLoadingTexture ? 'Loading...' : (node.data.textureAsset ? 'Change Asset' : 'Select Asset')}
-                                   </button>
-                                </div>
-                            </div>
-                         )
-                     )}
-
-                     {node.type === 'calculateLevelOfDetailTexture' && (
-                         <div className="flex items-center justify-between px-1 h-6 bg-[#0a0a0a] border border-gray-700 rounded">
-                            <span className="text-[9px] text-gray-400">Clamp</span>
-                            <button 
-                                onClick={() => onUpdateData(node.id, { clamp: !node.data.clamp })}
-                                onMouseDown={e => e.stopPropagation()}
-                                className="text-gray-400 hover:text-white"
-                            >
-                                {node.data.clamp ? <CheckSquare className="w-3 h-3" /> : <SquareIcon className="w-3 h-3" />}
-                            </button>
-                         </div>
-                     )}
-                   </div>
-                )}
-
-                {/* TEXTURE 2D ARRAY ASSET UI */}
-                {node.type === 'texture2DArrayAsset' && (
-                    <div className="flex flex-col gap-2 nodrag">
-                        {/* ... Texture Array Logic ... */}
-                        <input 
-                            type="file" 
-                            ref={arrayFileInputRef} 
-                            className="hidden" 
-                            accept="image/png, image/jpeg, image/jpg, image/webp, .tga"
-                            multiple
-                            onChange={handleTextureArrayUpload}
-                        />
-                        
-                        <div className="flex justify-between items-center mb-1">
-                            <span className="text-[9px] text-gray-400 font-semibold flex items-center gap-1">
-                                <Layers className="w-3 h-3"/> {node.data.layerCount || 0} Layers
-                            </span>
-                            <button 
-                                className="bg-blue-600 hover:bg-blue-500 text-white p-1 rounded text-[9px] flex items-center gap-1"
-                                onClick={() => arrayFileInputRef.current?.click()}
-                                onMouseDown={e => e.stopPropagation()}
-                                disabled={isLoadingTexture}
-                            >
-                            {isLoadingTexture ? <Loader2 className="w-3 h-3 animate-spin"/> : <Plus className="w-3 h-3" />} Add
-                            </button>
-                        </div>
-
-                        <div className="grid grid-cols-4 gap-1 max-h-32 overflow-y-auto scrollbar-thin bg-black/20 p-1 rounded">
-                            {(node.data.layers || []).map((layerSrc, idx) => (
-                                <div key={idx} className="relative group aspect-square border border-gray-700 rounded overflow-hidden">
-                                    <img src={layerSrc} className="w-full h-full object-cover" />
-                                    <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
-                                        <button 
-                                            className="text-red-400 hover:text-red-200"
-                                            onClick={() => removeArrayLayer(idx)}
-                                            onMouseDown={e => e.stopPropagation()}
-                                        >
-                                            <X className="w-4 h-4" />
-                                        </button>
-                                    </div>
-                                    <div className="absolute bottom-0 right-0 bg-black/80 text-[8px] px-1 text-gray-300">
-                                        {idx}
-                                    </div>
-                                </div>
-                            ))}
-                            {(node.data.layers?.length === 0 || !node.data.layers) && (
-                                <div className="col-span-4 text-[9px] text-gray-600 text-center py-4 border border-dashed border-gray-700 rounded">
-                                    No textures loaded.<br/>Same size required.
-                                </div>
-                            )}
-                        </div>
-                    </div>
-                )}
-                
-                {/* SAMPLER STATE NODE UI */}
-                {node.type === 'samplerState' && (
-                    <div className="flex flex-col gap-2 nodrag">
-                        <div className="flex items-center justify-between">
-                            <span className="text-[10px] text-gray-400">Filter</span>
-                            <select 
-                                className="bg-[#0a0a0a] border border-gray-700 rounded text-[10px] text-white outline-none h-5 w-20"
-                                value={node.data.samplerFilter || 'Linear'}
-                                onChange={(e) => onUpdateData(node.id, { samplerFilter: e.target.value })}
-                                onMouseDown={e => e.stopPropagation()}
-                            >
-                                <option value="Linear">Linear</option>
-                                <option value="Point">Point</option>
-                                <option value="Trilinear">Trilinear</option>
-                            </select>
-                        </div>
-                        <div className="flex items-center justify-between">
-                            <span className="text-[10px] text-gray-400">Wrap</span>
-                            <select 
-                                className="bg-[#0a0a0a] border border-gray-700 rounded text-[10px] text-white outline-none h-5 w-20"
-                                value={node.data.samplerWrap || 'Repeat'}
-                                onChange={(e) => onUpdateData(node.id, { samplerWrap: e.target.value })}
-                                onMouseDown={e => e.stopPropagation()}
-                            >
-                                <option value="Repeat">Repeat</option>
-                                <option value="Clamp">Clamp</option>
-                                <option value="Mirror">Mirror</option>
-                                <option value="MirrorOnce">Mirror Once</option>
-                            </select>
-                        </div>
-                    </div>
-                )}
-
-                {/* SLIDER NODE UI */}
-                {node.type === 'slider' && (
-                    <div className="flex flex-col gap-3 nodrag">
-                        <div className="flex items-center gap-2">
-                            <input 
-                                type="range"
-                                min={node.data.minValue ?? 0}
-                                max={node.data.maxValue ?? 1}
-                                step={0.01}
-                                value={node.data.value ?? 0.5}
-                                onChange={(e) => onUpdateData(node.id, { value: parseFloat(e.target.value) })}
-                                className="flex-1 h-1.5 bg-gray-700 rounded-lg appearance-none cursor-pointer slider-thumb"
-                                onMouseDown={e => e.stopPropagation()}
-                            />
-                            <div className="w-10 bg-[#0a0a0a] border border-gray-700 rounded px-1 flex items-center">
-                                <input 
-                                    type="number"
-                                    step={0.01}
-                                    className="w-full h-5 bg-transparent text-[10px] text-white outline-none text-right"
-                                    value={node.data.value ?? 0.5}
-                                    onChange={(e) => onUpdateData(node.id, { value: e.target.value })}
-                                    onMouseDown={e => e.stopPropagation()}
-                                />
-                            </div>
-                        </div>
-                        <div className="flex gap-2">
-                            <div className="flex items-center gap-2 flex-1">
-                                <span className="text-[10px] text-gray-400">Min</span>
-                                <div className="flex-1 bg-[#0a0a0a] border border-gray-700 rounded px-1">
-                                    <input 
-                                        type="number"
-                                        step={0.1}
-                                        className="w-full h-5 bg-transparent text-[10px] text-white outline-none"
-                                        value={node.data.minValue ?? 0}
-                                        onChange={(e) => onUpdateData(node.id, { minValue: e.target.value })}
-                                        onMouseDown={e => e.stopPropagation()}
-                                    />
-                                </div>
-                            </div>
-                            <div className="flex items-center gap-2 flex-1">
-                                <span className="text-[10px] text-gray-400">Max</span>
-                                <div className="flex-1 bg-[#0a0a0a] border border-gray-700 rounded px-1">
-                                    <input 
-                                        type="number"
-                                        step={0.1}
-                                        className="w-full h-5 bg-transparent text-[10px] text-white outline-none"
-                                        value={node.data.maxValue ?? 1}
-                                        onChange={(e) => onUpdateData(node.id, { maxValue: e.target.value })}
-                                        onMouseDown={e => e.stopPropagation()}
-                                    />
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-                )}
-
-                {/* CHANNEL MASK UI */}
-                {node.type === 'channelMask' && (
-                    <div className="relative w-full nodrag mb-1">
-                        <div className="flex items-center justify-between mb-1">
-                             <span className="text-[9px] text-gray-500">Channels</span>
-                        </div>
-                        <button 
-                            className="w-full h-6 bg-[#0a0a0a] border border-gray-700 rounded flex items-center justify-between px-2 text-[10px] text-white hover:border-gray-500 transition-colors"
-                            onClick={(e) => { 
-                                e.stopPropagation(); 
-                                setIsMaskOpen(!isMaskOpen); 
-                            }}
-                            onMouseDown={e => e.stopPropagation()}
-                        >
-                            <span className="truncate tracking-widest">{node.data.channelMask || 'None'}</span>
-                            <ChevronDown className="w-3 h-3 text-gray-500" />
-                        </button>
-
-                        {isMaskOpen && (
-                            <div className="absolute top-full left-0 w-full bg-[#1e1e1e] border border-gray-600 rounded shadow-2xl mt-1 flex flex-col overflow-hidden z-[100]">
-                                <button 
-                                    className="px-2 py-1.5 text-[9px] text-left text-gray-300 hover:bg-gray-700 hover:text-white border-b border-gray-800"
-                                    onClick={(e) => {
-                                        e.stopPropagation();
-                                        onUpdateData(node.id, { channelMask: '' });
-                                    }}
-                                    onMouseDown={e => e.stopPropagation()}
-                                >
-                                    Nothing
-                                </button>
-                                <button 
-                                    className="px-2 py-1.5 text-[9px] text-left text-gray-300 hover:bg-gray-700 hover:text-white border-b border-gray-800"
-                                    onClick={(e) => {
-                                        e.stopPropagation();
-                                        onUpdateData(node.id, { channelMask: 'RGBA' });
-                                    }}
-                                    onMouseDown={e => e.stopPropagation()}
-                                >
-                                    Everything
-                                </button>
-
-                                {['Red', 'Green', 'Blue', 'Alpha'].map(label => {
-                                    const char = label[0];
-                                    const current = node.data.channelMask || 'RGBA';
-                                    const isActive = current.includes(char);
-                                    return (
-                                        <button
-                                            key={char}
-                                            className={`flex items-center gap-2 px-2 py-1.5 text-[9px] hover:bg-gray-700 w-full text-left ${isActive ? 'text-blue-400' : 'text-gray-400'}`}
-                                            onClick={(e) => {
-                                                e.stopPropagation();
-                                                const order = ['R', 'G', 'B', 'A'];
-                                                let newMask = isActive ? current.replace(char, '') : current + char;
-                                                newMask = order.filter(c => newMask.includes(c)).join('');
-                                                onUpdateData(node.id, { channelMask: newMask });
-                                            }}
-                                            onMouseDown={e => e.stopPropagation()}
-                                        >
-                                            <div className={`w-2.5 h-2.5 rounded border flex items-center justify-center ${isActive ? 'bg-blue-600 border-blue-600' : 'border-gray-600'}`}>
-                                                {isActive && <Check className="w-2 h-2 text-white" />}
-                                            </div>
-                                            {label}
-                                        </button>
-                                    );
-                                })}
-                            </div>
-                        )}
-                    </div>
-                )}
-
-                {/* Matrix Construction & Swizzle UI */}
-                {node.type === 'matrixConstruction' && (
-                <div className="w-full h-6 rounded border border-gray-700 bg-[#0a0a0a] flex items-center px-1 nodrag">
-                        <span className="text-[9px] text-gray-500 mr-2">Mode</span>
-                        <select 
-                            className="bg-[#0a0a0a] text-[10px] text-white w-full outline-none border-none cursor-pointer"
-                            value={node.data.matrixMode || 'Row'}
-                            onChange={(e) => onUpdateData(node.id, { matrixMode: e.target.value })}
-                            onMouseDown={e => e.stopPropagation()}
-                        >
-                            <option value="Row">Row</option>
-                            <option value="Column">Column</option>
-                        </select>
-                </div>
-                )}
-                
-                {node.type === 'swizzle' && swizzleOptions && (
-                <div className="flex flex-col gap-1 nodrag">
-                    <div className="flex items-center justify-between mb-1">
-                        <span className="text-[9px] text-gray-500">Mask</span>
-                        <span className="text-[9px] text-blue-400 font-mono">{node.data.mask || 'xyzw'}</span>
-                    </div>
-                    <select 
-                        className="w-full h-6 bg-[#0a0a0a] border border-gray-700 rounded text-[10px] text-white outline-none cursor-pointer"
-                        value={node.data.mask || 'xyzw'}
-                        onChange={(e) => onUpdateData(node.id, { mask: e.target.value })}
-                        onMouseDown={e => e.stopPropagation()}
-                    >
-                        <optgroup label="Float (1)">
-                            {swizzleOptions.filter(o => o.length === 1).map(o => <option key={o} value={o}>{o}</option>)}
-                        </optgroup>
-                        <optgroup label="Vector 2">
-                            {swizzleOptions.filter(o => o.length === 2).map(o => <option key={o} value={o}>{o}</option>)}
-                        </optgroup>
-                        <optgroup label="Vector 3">
-                            {swizzleOptions.filter(o => o.length === 3).map(o => <option key={o} value={o}>{o}</option>)}
-                        </optgroup>
-                        <optgroup label="Vector 4">
-                            {swizzleOptions.filter(o => o.length === 4).map(o => <option key={o} value={o}>{o}</option>)}
-                        </optgroup>
-                    </select>
-                </div>
-                )}
-
-                {/* Static Inputs */}
-                {node.type === 'color' && (
-                <div className="w-full h-8 rounded border border-gray-700 overflow-hidden relative nodrag">
-                        <ThrottledColorInput 
-                            value={node.data.value || '#ffffff'}
-                            onChange={(newVal) => onUpdateData(node.id, { value: newVal })}
-                        />
-                </div>
-                )}
-                {node.type === 'float' && (
-                <div className="flex items-center bg-[#0a0a0a] border border-gray-700 rounded px-2 focus-within:border-blue-500 nodrag">
-                    <span className="text-[10px] text-gray-500 mr-2 font-mono">Value</span>
-                    <input 
-                    type="number" 
-                    className="w-full h-6 bg-transparent text-[10px] text-white outline-none"
-                    step="0.1"
-                    value={node.data.value || 0}
-                    onChange={(e) => onUpdateData(node.id, { value: e.target.value })}
-                    onMouseDown={e => e.stopPropagation()}
-                    />
-                </div>
-                )}
-            </>
+            registryUi ? (
+                <NodeModuleUI
+                    ui={registryUi}
+                    node={node}
+                    allConnections={allConnections}
+                    onUpdateData={onUpdateData}
+                />
+            ) : null
         )}
         
         {/* Sockets - (Existing Code) */}
         <div className="flex justify-between gap-4">
             <div className="flex flex-col gap-2 pt-1 w-full">
-                {node.inputs.map((socket) => {
-                    // Logic to hide/show sockets based on Dielectric Material mode
-                    if (node.type === 'dielectricSpecular') {
-                        const mode = node.data.dielectricMaterial || 'Common';
-                        
-                        // Range is only for Common
-                        if (socket.id === 'range' && mode !== 'Common') return null;
-                        
-                        // IOR is only for Custom
-                        if (socket.id === 'ior' && mode !== 'Custom') return null;
-                        
-                        // If it's a Preset (Water, Ice, etc), both are hidden
-                    }
+                {getEffectiveSockets(node, node.inputs, 'input', allConnections, registrySocketRules)
+                    .filter(socket => socket.visible)
+                    .map((socket) => {
+                        const hideUnconnected = registrySocketRules?.collapse?.hideUnconnectedSockets ?? true;
+                        if (isNodeCollapsed && hideUnconnected) {
+                            const isConnected = allConnections.some(c => c.targetNodeId === node.id && c.targetSocketId === socket.id);
+                            if (!isConnected) return null;
+                        }
 
-                    if (isNodeCollapsed) {
-                        const isConnected = allConnections.some(c => c.targetNodeId === node.id && c.targetSocketId === socket.id);
-                        if (!isConnected) return null;
-                    }
-
-                    return (
-                        <div key={socket.id} className="flex flex-col gap-1 min-h-[20px] relative justify-center">
-                            <div className="flex items-center justify-between w-full">
-                                <div className="flex items-center gap-2">
-                                    <div 
-                                        id={`socket-${node.id}-${socket.id}-in`}
-                                        className="relative flex items-center justify-center w-6 h-6 -ml-3 cursor-crosshair group"
-                                        onMouseDown={(e) => {
-                                            e.stopPropagation();
-                                            onSocketMouseDown(e, node.id, socket.id, true, socket.type);
-                                        }}
-                                        onMouseUp={(e) => {
-                                            e.stopPropagation();
-                                            onSocketMouseUp(e, node.id, socket.id, true, socket.type);
-                                        }}
-                                    >
-                                        <div className={`w-2.5 h-2.5 rounded-full border border-[#111] ${getSocketColor(socket.type)} group-hover:scale-125 transition-transform z-10 shadow-sm`} />
+                        return (
+                            <div key={socket.id} className={`flex flex-col gap-1 min-h-[20px] relative justify-center ${socket.enabled ? '' : 'opacity-50'}`}>
+                                <div className="flex items-center justify-between w-full">
+                                    <div className="flex items-center gap-2">
+                                        <div 
+                                            id={`socket-${node.id}-${socket.id}-in`}
+                                            className={`relative flex items-center justify-center w-6 h-6 -ml-3 group ${socket.enabled ? 'cursor-crosshair' : 'cursor-not-allowed'}`}
+                                            onMouseDown={(e) => {
+                                                e.stopPropagation();
+                                                if (!socket.enabled) return;
+                                                onSocketMouseDown(e, node.id, socket.id, true, socket.type);
+                                            }}
+                                            onMouseUp={(e) => {
+                                                e.stopPropagation();
+                                                if (!socket.enabled) return;
+                                                onSocketMouseUp(e, node.id, socket.id, true, socket.type);
+                                            }}
+                                        >
+                                            <div className={`w-2.5 h-2.5 rounded-full border border-[#111] ${getSocketColor(socket.type)} ${socket.enabled ? 'group-hover:scale-125' : ''} transition-transform z-10 shadow-sm`} />
+                                        </div>
+                                        <span className="text-[10px] text-gray-400 font-medium pointer-events-none">{socket.label}</span>
                                     </div>
-                                    <span className="text-[10px] text-gray-400 font-medium pointer-events-none">{socket.label}</span>
+                                    {renderSocketInput(socket.id, socket.type)}
                                 </div>
-                                {renderSocketInput(socket.id, socket.type)}
                             </div>
-                        </div>
-                    );
-                })}
+                        );
+                    })}
             </div>
 
             <div className="flex flex-col gap-2 pt-1 items-end">
-                {node.outputs.map((socket) => {
-                    if (isNodeCollapsed) {
-                        const isConnected = allConnections.some(c => c.sourceNodeId === node.id && c.sourceSocketId === socket.id);
-                        if (!isConnected) return null;
-                    }
+                {getEffectiveSockets(node, node.outputs, 'output', allConnections, registrySocketRules)
+                    .filter(socket => socket.visible)
+                    .map((socket) => {
+                        const hideUnconnected = registrySocketRules?.collapse?.hideUnconnectedSockets ?? true;
+                        if (isNodeCollapsed && hideUnconnected) {
+                            const isConnected = allConnections.some(c => c.sourceNodeId === node.id && c.sourceSocketId === socket.id);
+                            if (!isConnected) return null;
+                        }
 
-                    return (
-                    <div key={socket.id} className="flex items-center gap-2 min-h-[20px] relative justify-end">
-                        <span className="text-[10px] text-gray-400 font-medium pointer-events-none">{socket.label}</span>
-                        <div 
-                            id={`socket-${node.id}-${socket.id}-out`}
-                            className="relative flex items-center justify-center w-6 h-6 -mr-3 cursor-crosshair group"
-                             onMouseDown={(e) => {
-                                e.stopPropagation();
-                                onSocketMouseDown(e, node.id, socket.id, false, socket.type);
-                            }}
-                            onMouseUp={(e) => {
-                                e.stopPropagation();
-                                onSocketMouseUp(e, node.id, socket.id, false, socket.type);
-                            }}
-                        >
-                            <div className={`w-2.5 h-2.5 rounded-full border border-[#111] ${getSocketColor(socket.type)} group-hover:scale-125 transition-transform z-10 shadow-sm`} />
-                        </div>
-                    </div>
-                )})}
+                        return (
+                            <div key={socket.id} className={`flex items-center gap-2 min-h-[20px] relative justify-end ${socket.enabled ? '' : 'opacity-50'}`}>
+                                <span className="text-[10px] text-gray-400 font-medium pointer-events-none">{socket.label}</span>
+                                <div 
+                                    id={`socket-${node.id}-${socket.id}-out`}
+                                    className={`relative flex items-center justify-center w-6 h-6 -mr-3 group ${socket.enabled ? 'cursor-crosshair' : 'cursor-not-allowed'}`}
+                                     onMouseDown={(e) => {
+                                        e.stopPropagation();
+                                        if (!socket.enabled) return;
+                                        onSocketMouseDown(e, node.id, socket.id, false, socket.type);
+                                    }}
+                                    onMouseUp={(e) => {
+                                        e.stopPropagation();
+                                        if (!socket.enabled) return;
+                                        onSocketMouseUp(e, node.id, socket.id, false, socket.type);
+                                    }}
+                                >
+                                    <div className={`w-2.5 h-2.5 rounded-full border border-[#111] ${getSocketColor(socket.type)} ${socket.enabled ? 'group-hover:scale-125' : ''} transition-transform z-10 shadow-sm`} />
+                                </div>
+                            </div>
+                        );
+                    })}
             </div>
         </div>
       </div>

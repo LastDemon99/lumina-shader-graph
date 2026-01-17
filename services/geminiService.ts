@@ -2,6 +2,8 @@
 import { GoogleGenAI, Type, Schema } from "@google/genai";
 import { NODE_DEFINITIONS } from "../constants";
 import { NodeType, ShaderNode, Connection } from "../types";
+import { NODE_REGISTRY, getNodeModule } from "../nodes";
+import { getFallbackSocketId } from "../nodes/runtime";
 
 // Schema is shared between draft and refine stages
 const GRAPH_SCHEMA: Schema = {
@@ -45,7 +47,7 @@ const GRAPH_SCHEMA: Schema = {
 export class GeminiService {
   private modelId = 'gemini-3-flash-preview';
 
-  private definitions = Object.keys(NODE_DEFINITIONS).join(', ');
+  private definitions = Array.from(new Set([...Object.keys(NODE_DEFINITIONS), ...Object.keys(NODE_REGISTRY)])).join(', ');
 
   private sanitizeGraph(rawData: any) {
       if (!rawData || !rawData.nodes || !rawData.connections) return null;
@@ -57,15 +59,27 @@ export class GeminiService {
 
           if (!sourceNode || !targetNode) return null;
 
-          const sourceDef = NODE_DEFINITIONS[sourceNode.type as NodeType];
-          const targetDef = NODE_DEFINITIONS[targetNode.type as NodeType];
+          const sourceMod = getNodeModule(sourceNode.type);
+          const targetMod = getNodeModule(targetNode.type);
+          const sourceDef = (sourceMod?.definition ?? NODE_DEFINITIONS[sourceNode.type as NodeType]) as any;
+          const targetDef = (targetMod?.definition ?? NODE_DEFINITIONS[targetNode.type as NodeType]) as any;
 
           if (!sourceDef || !targetDef) return null;
 
           let finalSourceSocketId = conn.sourceSocketId;
           const sourceExists = sourceDef.outputs.find(o => o.id === finalSourceSocketId);
           if (!sourceExists && sourceDef.outputs.length > 0) {
-              finalSourceSocketId = sourceDef.outputs[0].id;
+              const fauxSourceNode: ShaderNode = {
+                id: sourceNode.id,
+                type: sourceNode.type,
+                label: sourceDef.label,
+                x: sourceNode.x ?? 0,
+                y: sourceNode.y ?? 0,
+                inputs: sourceDef.inputs,
+                outputs: sourceDef.outputs,
+                data: {},
+              };
+              finalSourceSocketId = getFallbackSocketId(fauxSourceNode, 'output', sourceMod?.socketRules) ?? sourceDef.outputs[0].id;
           }
 
           let finalTargetSocketId = conn.targetSocketId;
@@ -76,7 +90,17 @@ export class GeminiService {
               } else if (finalTargetSocketId === 'a' && targetDef.inputs.some(k => k.id === 'a')) {
                   // Keep 'a'
               } else {
-                  finalTargetSocketId = targetDef.inputs[0].id;
+                const fauxTargetNode: ShaderNode = {
+                  id: targetNode.id,
+                  type: targetNode.type,
+                  label: targetDef.label,
+                  x: targetNode.x ?? 0,
+                  y: targetNode.y ?? 0,
+                  inputs: targetDef.inputs,
+                  outputs: targetDef.outputs,
+                  data: {},
+                };
+                finalTargetSocketId = getFallbackSocketId(fauxTargetNode, 'input', targetMod?.socketRules) ?? targetDef.inputs[0].id;
               }
           }
 
