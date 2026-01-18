@@ -35,24 +35,24 @@ class PreviewSystem {
     private programs: Map<string, WebGLProgram> = new Map(); // Cache programs by source hash
     private textures: Map<string, WebGLTexture> = new Map(); // Cache textures by URL
     private placeholderTex: WebGLTexture | null = null;
-    
+
     // Shared Geometry Buffers
     private quadGeo: GLGeometry | null = null;
     private sphereGeo: GLGeometry | null = null;
-    
+
     private animationFrameId: number | null = null;
 
     init(canvas: HTMLCanvasElement) {
         this.canvas = canvas;
         this.gl = createWebGLContext(canvas);
-        
+
         if (!this.gl) {
             console.error("Failed to initialize Global Preview GL Context");
             return;
         }
 
         this.placeholderTex = createPlaceholderTexture(this.gl);
-        
+
         // Upload geometry once
         this.quadGeo = this.uploadGeometry(this.gl, createQuad());
         this.sphereGeo = this.uploadGeometry(this.gl, createSphere(0.8, 32, 32));
@@ -99,7 +99,7 @@ class PreviewSystem {
             cancelAnimationFrame(this.animationFrameId);
             this.animationFrameId = null;
         }
-        
+
         // Cleanup Geometry
         if (this.gl) {
             const cleanupGeo = (geo: GLGeometry | null) => {
@@ -113,7 +113,7 @@ class PreviewSystem {
             };
             cleanupGeo(this.quadGeo);
             cleanupGeo(this.sphereGeo);
-            
+
             this.items.clear();
             this.programs.forEach(p => this.gl!.deleteProgram(p));
             this.programs.clear();
@@ -170,9 +170,9 @@ class PreviewSystem {
             }
 
             this.gl.disable(this.gl.SCISSOR_TEST);
-            this.gl.clearColor(0, 0, 0, 0); 
+            this.gl.clearColor(0, 0, 0, 0);
             this.gl.clear(this.gl.COLOR_BUFFER_BIT | this.gl.DEPTH_BUFFER_BIT);
-            
+
             this.gl.enable(this.gl.SCISSOR_TEST);
 
             const canvasRect = this.canvas.getBoundingClientRect();
@@ -188,17 +188,17 @@ class PreviewSystem {
 
     private renderItem(item: RenderItem, time: number, dpr: number, canvasRect: DOMRect) {
         const gl = this.gl!;
-        const canvasHeight = this.canvas!.height; 
+        const canvasHeight = this.canvas!.height;
 
         // 1. Calculate Scissor Box relative to Canvas
         const rect = item.element.getBoundingClientRect();
-        
+
         if (
-            rect.bottom < 0 || 
-            rect.top > window.innerHeight || 
-            rect.right < 0 || 
+            rect.bottom < 0 ||
+            rect.top > window.innerHeight ||
+            rect.right < 0 ||
             rect.left > window.innerWidth ||
-            rect.width === 0 || 
+            rect.width === 0 ||
             rect.height === 0
         ) {
             return;
@@ -214,7 +214,7 @@ class PreviewSystem {
 
         gl.viewport(x, y, width, height);
         gl.scissor(x, y, width, height);
-        
+
         gl.clearColor(0.05, 0.05, 0.05, 1.0);
         gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
 
@@ -229,7 +229,7 @@ class PreviewSystem {
                     this.programs.set(progKey, p);
                     program = p;
                 } else {
-                    return; 
+                    return;
                 }
             } catch (e) {
                 return;
@@ -241,13 +241,13 @@ class PreviewSystem {
         // 3. Geometry
         const geo = item.mode === '3d' ? this.sphereGeo : this.quadGeo;
         if (!geo) return;
-        
+
         this.bindAttribute(program!, 'position', geo.position, 3);
         this.bindAttribute(program!, 'normal', geo.normal, 3);
         this.bindAttribute(program!, 'uv', geo.uv, 2);
         this.bindAttribute(program!, 'tangent', geo.tangent, 4);
         this.bindAttribute(program!, 'color', geo.color, 4);
-        
+
         gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, geo.indices);
 
         // 4. Uniforms & Matrices
@@ -255,12 +255,13 @@ class PreviewSystem {
         const projection = new Float32Array(16);
         const view = new Float32Array(16);
         const model = new Float32Array(16);
-        
+
         if (item.mode === '3d') {
             mat4.perspective(projection, Math.PI / 4, aspect, 0.1, 100.0);
             mat4.lookAt(view, [0, 0, 2.5], [0, 0, 0], [0, 1, 0]);
             mat4.identity(model);
-            mat4.rotateY(model, model, time * 0.001);
+            mat4.rotateX(model, model, 0.5);
+            mat4.rotateY(model, model, 0.5);
         } else {
             mat4.identity(projection);
             mat4.identity(view);
@@ -277,7 +278,7 @@ class PreviewSystem {
         this.setUniformMatrix(program!, 'u_model', model);
         this.setUniformMatrix(program!, 'u_model_inv', modelInv);
         this.setUniformMatrix(program!, 'u_view_inv', viewInv);
-        
+
         // Bounds Uniforms
         const uBoundsMin = gl.getUniformLocation(program!, 'u_boundsMin');
         if (uBoundsMin) gl.uniform3f(uBoundsMin, -0.8, -0.8, -0.8);
@@ -285,25 +286,25 @@ class PreviewSystem {
         if (uBoundsMax) gl.uniform3f(uBoundsMax, 0.8, 0.8, 0.8);
 
         const uTime = gl.getUniformLocation(program!, 'u_time');
-        if(uTime) gl.uniform1f(uTime, time * 0.001);
+        if (uTime) gl.uniform1f(uTime, time * 0.001);
 
         // Camera Uniforms
         const camPos = item.mode === '3d' ? [0, 0, 2.5] : [0, 0, 1];
         const uCamPos = gl.getUniformLocation(program!, 'u_cameraPosition');
-        if(uCamPos) gl.uniform3f(uCamPos, camPos[0], camPos[1], camPos[2]);
-        
+        if (uCamPos) gl.uniform3f(uCamPos, camPos[0], camPos[1], camPos[2]);
+
         // --- NEW: Camera Near/Far for Depth Calculations ---
         const uCamNear = gl.getUniformLocation(program!, 'u_cameraNear');
         const uCamFar = gl.getUniformLocation(program!, 'u_cameraFar');
         if (uCamNear) gl.uniform1f(uCamNear, 0.1);
         if (uCamFar) gl.uniform1f(uCamFar, 100.0);
         // ----------------------------------------------------
-        
+
         // Viewport Uniform (Critical for Screen Position node logic)
         // Pass x, y, width, height (Scissor Box)
         const uViewPort = gl.getUniformLocation(program!, 'u_viewPort');
-        if(uViewPort) gl.uniform4f(uViewPort, x, y, width, height);
-        
+        if (uViewPort) gl.uniform4f(uViewPort, x, y, width, height);
+
         // 5. Textures
         if (this.placeholderTex) {
             gl.activeTexture(gl.TEXTURE0);
@@ -327,7 +328,7 @@ class PreviewSystem {
             if (tex) {
                 gl.activeTexture(gl.TEXTURE0 + texUnit);
                 applyTextureParams(gl, tex, config.wrap, config.filter);
-                
+
                 // Bind the Texture Sampler
                 const loc = gl.getUniformLocation(program!, name);
                 if (loc) gl.uniform1i(loc, texUnit);
@@ -353,7 +354,7 @@ class PreviewSystem {
         const gl = this.gl!;
         const loc = gl.getAttribLocation(program, name);
         if (loc === -1) return;
-        
+
         gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
         gl.enableVertexAttribArray(loc);
         gl.vertexAttribPointer(loc, size, gl.FLOAT, false, 0, 0);

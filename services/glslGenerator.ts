@@ -99,10 +99,12 @@ vec3 applyLighting(vec3 baseColor, vec3 normal, vec3 viewDir, vec3 lightDir, vec
     // Direct Additive Specular
     vec3 specular = specularColor * lightColor * specTerm;
 
-    // 4. Ambient
-    vec3 ambient = baseColor * 0.03;
+    // 4. Ambient (Balanced for consistent look across editor)
+    float sky = max(dot(N, vec3(0.0, 1.0, 0.0)), 0.0) * 0.2;
+    float ground = max(dot(N, vec3(0.0, -1.0, 0.0)), 0.0) * 0.1;
+    vec3 ambient = baseColor * (sky + ground + 0.05);
 
-    // 5. Combine (Additive)
+    // 5. Combine
     return (ambient + diffuse + specular) * occlusion;
 }
 `;
@@ -430,18 +432,18 @@ const processGraph = (nodes: ShaderNode[], connections: Connection[], targetNode
             // Detection of Vector types vs Color/Scalar for remapping
             const isVectorPreview = resultType.startsWith('vec') && resultType !== 'color';
 
-            let previewResult;
             if (isVectorPreview) {
-                // Remap [-1, 1] to [0, 1] for vectors to match Unity/Standard graph tools
-                previewResult = `(${resultVar} * 0.5 + 0.5)`;
+                // Vectors (Normals, Positions, etc) remain unlit for data clarity
+                finalAssignment = `gl_FragColor = vec4(${resultVar} * 0.5 + 0.5, 1.0);`;
             } else {
-                // Keep colors and scalars in [0, 1] range clamped
-                previewResult = `max(${resultVar}, 0.0)`;
+                // Colors and Scalars: Use Master Lighting Model for consistency
+                functions.add(LIGHTING_FUNCTIONS); // Ensure lighting is available
+                body.push(`vec3 viewDir = normalize(u_cameraPosition - vPosition);`);
+                body.push(`vec3 lightDir = normalize(vec3(0.5, 1.0, 0.5));`);
+                body.push(`vec3 lightColor = vec3(1.0, 0.98, 0.95);`);
+                body.push(`vec3 litPreview = applyLighting(${resultVar}, vNormal, viewDir, lightDir, lightColor, vec3(0.04), 0.5, 1.0);`);
+                body.push(`gl_FragColor = vec4(pow(max(litPreview, 0.0), vec3(0.4545)), 1.0);`);
             }
-
-            // Apply Gamma Correction to Preview (Linear -> sRGB)
-            // 1/2.2 approx 0.4545
-            finalAssignment = `gl_FragColor = vec4(pow(${previewResult}, vec3(0.4545)), 1.0);`;
         }
     } else if (mode === 'fragment') {
         const master = nodes.find(n => n.type === 'output');
@@ -468,10 +470,14 @@ const processGraph = (nodes: ShaderNode[], connections: Connection[], targetNode
 
             body.push(`vec3 lighting = applyLighting(${color}, ${normal}, viewDir, lightDir, lightColor, ${specular}, ${smoothness}, ${occlusion});`);
 
-            // Apply Gamma Correction to Final Output
-            body.push(`vec3 finalColor = pow(max(lighting + ${emission}, 0.0), vec3(0.4545));`);
-
-            body.push(`gl_FragColor = vec4(finalColor, ${alpha});`);
+            // Apply Adaptive Gamma Correction to Final Output (matches node previews)
+            body.push(`
+                vec3 _finalLighting = max(lighting + ${emission}, 0.0);
+                float _finalLuma = dot(_finalLighting, vec3(0.3333));
+                vec3 _finalGamma = pow(_finalLighting, vec3(0.4545));
+                vec3 finalColor = mix(_finalGamma, _finalLighting, smoothstep(0.0, 0.5, _finalLuma));
+                gl_FragColor = vec4(finalColor, ${alpha});
+            `.trim());
         } else {
             finalAssignment = `gl_FragColor = vec4(1.0, 0.0, 1.0, 1.0);`;
         }

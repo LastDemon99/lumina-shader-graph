@@ -848,7 +848,7 @@ const App: React.FC = () => {
                   forcedMesh={previewMode === '2d' ? 'plane' : 'sphere'}
                   textures={textureUniforms}
                   showControls={false}
-                  autoRotate={previewMode === '3d'}
+                  autoRotate={false}
                   cameraDistance={previewMode === '2d' ? 2.5 : 2.5}
                 />
               </div>
