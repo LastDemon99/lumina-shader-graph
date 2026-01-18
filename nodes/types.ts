@@ -115,7 +115,7 @@ export interface NodeGlslEmitContext {
   body: string[];
   uniforms: Set<string>;
   functions: Set<string>;
-  variables: Record<string, { name: string; type: SocketType }>; 
+  variables: Record<string, { name: string; type: SocketType }>;
   getInput: (nodeId: string, socketId: string, defaultVal: string, expectedType: SocketType) => string;
   getDynamicType?: (inputSocketIds: string[]) => SocketType;
   getTextureUniformName?: (nodeId: string) => string;
@@ -135,6 +135,18 @@ export interface NodeModule {
   initialData?: (nodeId: string) => Record<string, unknown>;
   glsl?: {
     emit?: NodeGlslEmitter;
+  };
+  metadata?: {
+    legacyAliases?: string[];
+    requiresLod?: boolean;
+    requiresDerivatives?: boolean;
+    isTextureSampler?: boolean;
+    isDataVector?: boolean;
+    // Linter
+    isSourceNode?: boolean; // Does not require inputs (e.g. Time, UV)
+    isMasterNode?: boolean; // Does not require outputs (e.g. Output, Vertex)
+    // UI
+    headerColor?: string; // CSS Color class override, e.g. 'bg-yellow-500'
   };
 }
 

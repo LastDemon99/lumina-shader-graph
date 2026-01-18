@@ -1,10 +1,10 @@
 import type { NodeModule } from '../types';
 
-export const textureNode: NodeModule = {
-  type: 'texture',
+export const sampleTexture2DNode: NodeModule = {
+  type: 'sampleTexture2D',
   definition: {
-    type: 'texture',
-    label: 'Texture',
+    type: 'sampleTexture2D',
+    label: 'Sample Texture 2D',
     inputs: [
       { id: 'texture', label: 'Texture', type: 'texture' },
       { id: 'uv', label: 'UV', type: 'vec2' },
@@ -67,6 +67,11 @@ export const textureNode: NodeModule = {
     textureType: 'Default',
     space: 'Tangent',
   }),
+  metadata: {
+    legacyAliases: ['texture'],
+    isTextureSampler: true,
+    requiresLod: true,
+  },
   glsl: {
     emit: ctx => {
       const texUniform = ctx.getTextureUniformName?.(ctx.id);
@@ -109,3 +114,5 @@ export const textureNode: NodeModule = {
     },
   },
 };
+
+export default sampleTexture2DNode;

@@ -29,6 +29,10 @@ export const texture2DArrayAssetNode: NodeModule = {
     layerCount: 0,
     textureAsset: undefined,
   }),
+  metadata: {
+    isTextureSampler: true,
+    requiresLod: true,
+  },
   glsl: {
     emit: ctx => {
       const texUniform = ctx.getTextureUniformName?.(ctx.id);

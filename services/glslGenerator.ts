@@ -5,53 +5,28 @@ import { getNodeModule } from '../nodes';
 // (normals/positions/etc. -> remap [-1,1] to [0,1]) or a *color* (show lit result).
 // Defaulting vec3 to "vector" causes saturated colors like red (1,0,0) to appear pink
 // (1,0.5,0.5) due to the remap, so we only treat clearly vector-ish node types as vectors.
-const VECTOR_PREVIEW_NODE_TYPE_HINTS = [
-    'normal',
-    'tangent',
-    'bitangent',
-    'position',
-    'direction',
-    'screenPosition',
-    'viewDir',
-    'object',
-    'camera',
-];
-
 const isVectorPreviewNodeType = (nodeType: string): boolean => {
-    const t = String(nodeType);
-    // Exact matches for common semantic nodes
-    if (
-        t === 'normal' ||
-        t === 'tangent' ||
-        t === 'bitangent' ||
-        t === 'position' ||
-        t === 'screenPosition' ||
-        t === 'mainLightDirection' ||
-        t === 'object'
-    ) return true;
-
-    // Fuzzy matches for future/variant node names
-    const lower = t.toLowerCase();
-    return VECTOR_PREVIEW_NODE_TYPE_HINTS.some(h => lower.includes(h.toLowerCase()));
+    return getNodeModule(nodeType)?.metadata?.isDataVector ?? false;
 };
 
 // Helper to determine required extensions based on used nodes
 const getRequiredExtensions = (nodes: ShaderNode[], mode: 'fragment' | 'vertex'): string => {
     const extensions = new Set<string>();
 
-    const needsDerivatives = nodes.some(n => n.type === 'calculateLevelOfDetailTexture');
+    const needsDerivatives = nodes.some(n => getNodeModule(n.type)?.metadata?.requiresDerivatives);
 
     // Check if any node potentially needs LOD logic
     // This includes explicit LOD nodes, OR standard texture nodes used in Vertex Shader
     // We strictly enable it if we might need it.
-    const needsLod = nodes.some(n =>
-        n.type === 'sampleTexture2DLOD' ||
-        (mode === 'vertex' && n.type === 'texture') ||
-        n.type === 'textureSize' ||
-        n.type === 'calculateLevelOfDetailTexture' ||
-        (mode === 'vertex' && n.type === 'sampleTexture2DArray') ||
-        (mode === 'vertex' && n.type === 'parallaxMapping')
-    );
+    const needsLod = nodes.some(n => {
+        const metadata = getNodeModule(n.type)?.metadata;
+        if (!metadata) return false;
+
+        return (
+            metadata.requiresLod ||
+            (mode === 'vertex' && metadata.isTextureSampler)
+        );
+    });
 
     // OES_standard_derivatives is Fragment Only
     if (needsDerivatives && mode === 'fragment') extensions.add('#extension GL_OES_standard_derivatives : enable');

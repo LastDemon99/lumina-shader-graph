@@ -17,7 +17,13 @@ export const outputNode: NodeModule = {
     ],
     outputs: [],
   },
-  ui: { sections: [] },
+  ui: {
+    sections: [],
+    preview: { enabled: false },
+  },
+  metadata: {
+    isMasterNode: true,
+  },
   glsl: {
     emit: () => {
       // Master node handled by generator final assembly.

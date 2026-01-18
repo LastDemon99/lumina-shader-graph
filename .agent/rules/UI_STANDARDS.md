@@ -127,6 +127,8 @@ The UI for each node must be declared in its module (`nodes/modules/*.ts`) withi
 ### Rules
 1. **No hardcoding by `type` in the global UI** (`App.tsx` / `Node.tsx`).
     - The UI must render from the module definition (sections/controls).
+    - **Preview & Layout:** Use `ui.preview: { enabled: false }` or `ui.width: 'wide'` in the module definition instead of maintaining lists in `Node.tsx`.
+    - **Header Styling:** Use `metadata.headerColor` for custom header colors (e.g., Object node).
 2. **Socket rules / effective sockets**
     - Socket visibility/enabling depends on rules (`socketRules`).
     - The UI must be based on effective sockets (e.g., `getEffectiveSockets`) to:

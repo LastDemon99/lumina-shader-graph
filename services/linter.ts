@@ -54,21 +54,21 @@ export const lintGraph = (nodes: ShaderNode[], connections: Connection[]): strin
     }
 
     // Check Inputs
-    // We skip 'color', 'float', 'time', 'uv', 'position', 'normal' as they are sources
-    const isSourceNode = ['color', 'float', 'time', 'uv', 'position', 'normal'].includes(node.type);
-    
+    // We skip nodes marked as 'isSourceNode' or source heuristics in metadata
+    const isSourceNode = mod?.metadata?.isSourceNode ?? false;
+
     if (!isSourceNode && def.inputs.length > 0) {
       const connectedInputs = connections.filter(c => c.targetNodeId === node.id);
       if (connectedInputs.length === 0) {
         report.push(`Node '${node.label}' (ID: ${node.id}) has NO connected inputs. It needs data.`);
       } else if (connectedInputs.length < def.inputs.length) {
-         // This is a warning, some nodes like 'mix' might work with defaults, but usually bad practice in graph generation
-         report.push(`Node '${node.label}' (ID: ${node.id}) has unconnected input sockets.`);
+        // This is a warning, some nodes like 'mix' might work with defaults, but usually bad practice in graph generation
+        report.push(`Node '${node.label}' (ID: ${node.id}) has unconnected input sockets.`);
       }
     }
 
     // Check Outputs
-    const isMasterNode = ['output', 'vertex'].includes(node.type);
+    const isMasterNode = mod?.metadata?.isMasterNode ?? false;
     if (!isMasterNode && def.outputs.length > 0) {
       const connectedOutputs = connections.filter(c => c.sourceNodeId === node.id);
       if (connectedOutputs.length === 0) {

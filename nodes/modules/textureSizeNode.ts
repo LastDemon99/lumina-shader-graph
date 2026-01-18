@@ -33,6 +33,10 @@ export const textureSizeNode: NodeModule = {
   initialData: () => ({
     textureAsset: undefined,
   }),
+  metadata: {
+    isTextureSampler: true,
+    requiresLod: true,
+  },
   glsl: {
     emit: ctx => {
       const dimUniform = ctx.getTextureDimUniformName?.(ctx.id);

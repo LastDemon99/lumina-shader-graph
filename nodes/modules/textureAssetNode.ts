@@ -27,6 +27,10 @@ export const textureAssetNode: NodeModule = {
   initialData: () => ({
     textureAsset: undefined,
   }),
+  metadata: {
+    isTextureSampler: true,
+    requiresLod: true,
+  },
   glsl: {
     emit: ctx => {
       const texUniform = ctx.getTextureUniformName?.(ctx.id);

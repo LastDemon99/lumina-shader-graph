@@ -34,6 +34,7 @@ export type NodeType =
   | 'float'
   | 'textureAsset'
   | 'texture'
+  | 'sampleTexture2D'
   | 'textureSize'
   | 'texture2DArrayAsset'
   | 'sampleTexture2DArray'

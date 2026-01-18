@@ -48,6 +48,10 @@ export const parallaxMappingNode: NodeModule = {
     parallaxChannel: 'g',
     textureAsset: undefined,
   }),
+  metadata: {
+    isTextureSampler: true,
+    requiresLod: true,
+  },
   glsl: {
     emit: ctx => {
       const uv = ctx.getInput(ctx.id, 'uv', ctx.mode === 'vertex' ? 'uv' : 'vUv', 'vec2');

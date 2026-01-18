@@ -43,9 +43,11 @@ const getSocketColor = (type: SocketType) => {
     }
 };
 
-const NO_PREVIEW_TYPES = ['float', 'slider', 'time', 'color', 'vector2', 'vector3', 'vector4', 'uv', 'output', 'vertex', 'gradient', 'screen', 'matrixConstruction', 'dielectricSpecular', 'position', 'mainLightDirection', 'object', 'samplerState', 'split', 'textureSize', 'camera', 'sceneDepth', 'sceneDepthDifference', 'flipbook', 'parallaxMapping', 'reciprocal'];
+// Legacy lists kept for backward compatibility until all nodes migrate to metadata/ui config
+const LEGACY_NO_PREVIEW_TYPES = ['float', 'slider', 'time', 'color', 'vector2', 'vector3', 'vector4', 'uv', 'output', 'vertex', 'gradient', 'screen', 'matrixConstruction', 'dielectricSpecular', 'position', 'mainLightDirection', 'object', 'samplerState', 'split', 'textureSize', 'camera', 'sceneDepth', 'sceneDepthDifference', 'flipbook', 'parallaxMapping', 'reciprocal'];
 
-const WIDE_NODE_TYPES = ['color', 'split', 'slider', 'texture2DArrayAsset', 'gradient', 'radialShear'];
+const LEGACY_WIDE_NODE_TYPES = ['color', 'split', 'slider', 'texture2DArrayAsset', 'gradient', 'radialShear'];
+
 
 const ThrottledColorInput: React.FC<{ value: string; onChange: (val: string) => void }> = ({ value, onChange }) => {
     const [localValue, setLocalValue] = useState(value);
@@ -107,7 +109,7 @@ export const Node: React.FC<NodeProps> = ({
     const textureUniforms = useMemo(() => {
         const map: Record<string, { url: string, wrap: string, filter: string }> = {};
 
-        allNodes.filter(n => ['texture', 'sampleTexture2DLOD', 'gatherTexture2D', 'sampleTexture2DArray', 'textureSize', 'calculateLevelOfDetailTexture', 'parallaxMapping'].includes(n.type)).forEach(n => {
+        allNodes.filter(n => getNodeModule(n.type)?.metadata?.isTextureSampler).forEach(n => {
             let assetUrl = n.data.textureAsset;
             const assetConn = allConnections.find(c => c.targetNodeId === n.id && c.targetSocketId === 'texture');
 
@@ -165,10 +167,21 @@ export const Node: React.FC<NodeProps> = ({
     const registryUi = nodeModule?.ui;
     const registrySocketRules = nodeModule?.socketRules;
 
-    // RULE: Priorities module-defined behavior over legacy centralized lists.
-    const canShowPreview = registryUi?.preview ? registryUi.preview.enabled : !NO_PREVIEW_TYPES.includes(node.type);
-    const isObjectNode = node.type === 'object';
-    const isWide = registryUi?.width ? registryUi.width === 'wide' : WIDE_NODE_TYPES.includes(node.type);
+    // RULE: Prioritize module-defined behavior over legacy centralized lists.
+    const canShowPreview = registryUi?.preview
+        ? registryUi.preview.enabled
+        : !LEGACY_NO_PREVIEW_TYPES.includes(node.type);
+
+    const isWide = registryUi?.width
+        ? registryUi.width === 'wide'
+        : LEGACY_WIDE_NODE_TYPES.includes(node.type);
+
+    // Header Style Setup: Metadata > Specific Legacy (Object) > Default
+    const headerColorClass = nodeModule?.metadata?.headerColor
+        ? nodeModule.metadata.headerColor
+        : (node.type === 'object'
+            ? 'bg-[#eab308]/90 border-yellow-500 text-white shadow-inner'
+            : 'bg-[#2a2a2a]');
 
     const setPreviewMode = (mode: '2d' | '3d') => {
         onUpdateData(node.id, { previewMode: mode });
@@ -508,7 +521,7 @@ export const Node: React.FC<NodeProps> = ({
         return null;
     };
 
-    const isTextureInputConnected = (node.type === 'texture' || node.type === 'calculateLevelOfDetailTexture' || node.type === 'sampleTexture2DLOD' || node.type === 'gatherTexture2D' || node.type === 'sampleTexture2DArray' || node.type === 'textureSize' || node.type === 'parallaxMapping') &&
+    const isTextureInputConnected = getNodeModule(node.type)?.metadata?.isTextureSampler &&
         allConnections.some(c => c.targetNodeId === node.id && c.targetSocketId === 'texture');
 
     const isDitherScreenPosConnected = node.type === 'dither' &&
@@ -541,7 +554,7 @@ export const Node: React.FC<NodeProps> = ({
         >
             {/* Header */}
             <div
-                className={`h-7 rounded-t-lg flex items-center px-2 cursor-grab active:cursor-grabbing border-b border-black ${selected ? 'bg-blue-600' : isObjectNode ? 'bg-[#eab308]/90 border-yellow-500 text-white shadow-inner' : 'bg-[#2a2a2a]'}`}
+                className={`h-7 rounded-t-lg flex items-center px-2 cursor-grab active:cursor-grabbing border-b border-black ${selected ? 'bg-blue-600' : headerColorClass}`}
                 onMouseDown={(e) => onMouseDown(e, node.id)}
                 onDoubleClick={handleHeaderDoubleClick}
             >

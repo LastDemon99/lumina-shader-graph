@@ -4,7 +4,7 @@ export const calculateLevelOfDetailTextureNode: NodeModule = {
   type: 'calculateLevelOfDetailTexture',
   definition: {
     type: 'calculateLevelOfDetailTexture',
-    label: 'Texture LOD',
+    label: 'Calculate LOD Texture 2D',
     inputs: [
       { id: 'texture', label: 'Texture', type: 'texture' },
       { id: 'uv', label: 'UV', type: 'vec2' },
@@ -12,6 +12,7 @@ export const calculateLevelOfDetailTextureNode: NodeModule = {
     outputs: [{ id: 'lod', label: 'LOD', type: 'float' }],
   },
   ui: {
+    preview: { enabled: false },
     sections: [
       {
         id: 'main',
@@ -38,6 +39,11 @@ export const calculateLevelOfDetailTextureNode: NodeModule = {
     clamp: false,
     textureAsset: undefined,
   }),
+  metadata: {
+    isTextureSampler: true,
+    requiresLod: true,
+    requiresDerivatives: true,
+  },
   glsl: {
     emit: ctx => {
       const dimUniform = ctx.getTextureDimUniformName?.(ctx.id);
@@ -69,3 +75,5 @@ export const calculateLevelOfDetailTextureNode: NodeModule = {
     },
   },
 };
+
+export default calculateLevelOfDetailTextureNode;

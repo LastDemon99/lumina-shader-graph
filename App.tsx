@@ -96,7 +96,7 @@ const App: React.FC = () => {
 
     // 1. Handle Texture Nodes with Internal Assets (No input connection) or gathered from input
     // FIXED: Added 'calculateLevelOfDetailTexture', 'textureSize', and 'parallaxMapping' to ensure main scene gets data
-    nodes.filter(n => ['texture', 'sampleTexture2DLOD', 'gatherTexture2D', 'sampleTexture2DArray', 'calculateLevelOfDetailTexture', 'textureSize', 'parallaxMapping'].includes(n.type)).forEach(n => {
+    nodes.filter(n => getNodeModule(n.type)?.metadata?.isTextureSampler).forEach(n => {
       // Determine Asset URL
       let assetUrl = n.data.textureAsset;
       const assetConn = connections.find(c => c.targetNodeId === n.id && c.targetSocketId === 'texture');
@@ -138,15 +138,7 @@ const App: React.FC = () => {
       }
     });
 
-    // 2. Handle Orphaned Texture Assets (for previewing the asset node itself)
-    nodes.filter(n => n.type === 'textureAsset' || n.type === 'texture2DArrayAsset').forEach(n => {
-      if (n.data.textureAsset) {
-        const uniformName = `u_tex_${n.id.replace(/[-.]/g, '_')}`;
-        if (!map[uniformName]) {
-          map[uniformName] = { url: n.data.textureAsset, wrap: 'Repeat', filter: 'Linear' };
-        }
-      }
-    });
+    // 2. (Redundant) Orphaned Texture Assets are now handled by Step 1 via metadata.isTextureSampler
 
     return map;
   }, [nodes, connections]);

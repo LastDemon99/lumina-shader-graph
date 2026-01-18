@@ -22,12 +22,33 @@ const discovered = (): NodeModule[] => {
   return result;
 };
 
-export const NODE_REGISTRY: Record<string, NodeModule> = Object.fromEntries(
-  discovered().map((m) => [m.type, m]),
-);
+const registry: Record<string, NodeModule> = {};
+const legacyMap: Record<string, string> = {};
+
+discovered().forEach(m => {
+  registry[m.type] = m;
+  if (m.metadata?.legacyAliases) {
+    m.metadata.legacyAliases.forEach(alias => {
+      legacyMap[alias] = m.type;
+    });
+  }
+});
+
+export const NODE_REGISTRY = registry;
 
 export const getNodeModule = (type: string): NodeModule | undefined => {
-  return NODE_REGISTRY[type];
+  const actualType = legacyMap[type] || type;
+  return NODE_REGISTRY[actualType];
+};
+
+/**
+ * Finds all node types that match a specific metadata flag.
+ * Used for dynamic filtering in App.tsx/glslGenerator.ts
+ */
+export const findNodeTypesByMetadata = (predicate: (m: NodeModule['metadata']) => boolean | undefined): string[] => {
+  return Object.values(NODE_REGISTRY)
+    .filter(m => predicate(m.metadata))
+    .map(m => m.type);
 };
 
 export type NodeListCategory = {

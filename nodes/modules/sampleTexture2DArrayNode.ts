@@ -22,6 +22,11 @@ export const sampleTexture2DArrayNode: NodeModule = {
   ui: {
     sections: [],
   },
+  initialData: () => ({}),
+  metadata: {
+    isTextureSampler: true,
+    requiresLod: true,
+  },
   glsl: {
     emit: ctx => {
       const texUniform = ctx.getTextureUniformName?.(ctx.id);
