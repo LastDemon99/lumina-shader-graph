@@ -50,6 +50,20 @@ Hemos adoptado una arquitectura de **Contexto Único** para los nodos del grafo 
     *   **Gamma Correction:** La aplicación utiliza un flujo de trabajo lineal (Linear Workflow). Todas las operaciones matemáticas se hacen en espacio lineal, pero la salida final al fragment shader (`gl_FragColor`) **DEBE** ser convertida a espacio Gamma (sRGB) mediante `pow(color, 1.0/2.2)`. Esto es crucial para que los valores bajos no se vean negros.
 *   **Referencia:** Cualquier cambio en la lógica de iluminación debe consultar y actualizar `GLSL_STANDARDS.md`.
 
+### 1.5. Previews de Nodos: Color vs Vector (Evitar “Rojo → Rosa”)
+
+Los previews de nodos tienen un caso especial: un `vec3/vec4` puede representar **Color** (RGB/RGBA) o un **Vector de datos** (Normal/Posición/Dirección).
+
+*   **Problema histórico:** Si un valor que conceptualmente es color se interpreta como vector de datos, el preview puede aplicar un remapeo $[-1,1] \to [0,1]$.
+    *   Ejemplo: `vec3(1,0,0)` (rojo) pasa a `vec3(1,0.5,0.5)` (rosa).
+*   **Directiva:** El preview debe ser fiel a lo que vería el Master (misma intención visual: color/iluminación).
+*   **Implementación actual:** La clasificación se realiza en `services/glslGenerator.ts` al generar el shader del preview del nodo.
+    *   Por defecto, `vec3/vec4` se tratan como **color** en previews.
+    *   Solo se tratan como **vector de datos** (y por tanto se remapean) si el nodo es claramente vectorial (Normal/Position/Tangent/etc.).
+*   **Regla para nuevos nodos:**
+    *   Si tu nodo devuelve “color” (aunque sea un `vec3`), tipa su salida como `color` siempre que sea posible.
+    *   Si tu nodo devuelve un vector de datos (normal/posición/dirección), asegúrate de que el `node.type` refleje esa semántica o actualiza la lista de pistas vectoriales en `services/glslGenerator.ts`.
+
 ## 2. Capa de Lógica de Shaders (GLSL)
 
 La generación de código GLSL es el núcleo de la aplicación.

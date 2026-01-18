@@ -31,6 +31,13 @@ El componente `Node` es el bloque fundamental. Cualquier cambio en su CSS afecta
 - **Dimensiones:** `w-full aspect-square`.
 - **Fondo:** Puede tener borde, pero el contenido es renderizado por el `GlobalCanvas` superpuesto.
 
+### Nota crítica: “preview enabled” no define semántica de color
+Marcar `ui.preview: { enabled: true }` en un nodo solo controla **si se muestra** la miniatura, pero no determina si el valor se interpreta como **Color** o como **Vector de datos**.
+
+- La semántica se decide en el generador (`services/glslGenerator.ts`) y depende del tipo de salida (`color` vs `vec3/vec4`) y de la heurística por `node.type`.
+- Si un nodo que conceptualmente produce color se interpreta como vector, puede ocurrir el efecto “lavado” (ej. rojo → rosa) por el remapeo $[-1,1]\to[0,1]$.
+- Si al habilitar previews o tocar UI notas este efecto, la corrección NO está en CSS/Node.tsx: revisa tipado del módulo (`nodes/modules/*.ts`) y/o la heurística de clasificación en `services/glslGenerator.ts`.
+
 ---
 
 ## 2. Jerarquía de Capas (Z-Index)

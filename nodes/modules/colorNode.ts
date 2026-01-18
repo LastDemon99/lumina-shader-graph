@@ -6,7 +6,7 @@ export const colorNode: NodeModule = {
     type: 'color',
     label: 'Color',
     inputs: [],
-    outputs: [{ id: 'out', label: 'Out(3)', type: 'vec3' }],
+    outputs: [{ id: 'out', label: 'Out(3)', type: 'color' }],
   },
   ui: {
     width: 'normal',
@@ -35,14 +35,16 @@ export const colorNode: NodeModule = {
   initialData: () => ({ value: '#ffffff' }),
   glsl: {
     emit: ctx => {
-      const v = ctx.varName(ctx.id);
+      // Use an explicit socket-based name so preview heuristics can reliably
+      // identify this as a color value (vs a generic vec3 data vector).
+      const v = ctx.varName(ctx.id, 'rgb');
       const hex = (ctx.node.data.value || '#ffffff') as string;
       const rgb = ctx.toGLSL(hex, 'vec3', ctx.mode);
       ctx.body.push(`vec3 ${v} = ${rgb};`);
 
       // Compatibility: some legacy code/graphs used `rgb` as the output socket id.
-      ctx.variables[`${ctx.id}_out`] = { name: v, type: 'vec3' };
-      ctx.variables[`${ctx.id}_rgb`] = { name: v, type: 'vec3' };
+      ctx.variables[`${ctx.id}_out`] = { name: v, type: 'color' };
+      ctx.variables[`${ctx.id}_rgb`] = { name: v, type: 'color' };
       return true;
     },
   },

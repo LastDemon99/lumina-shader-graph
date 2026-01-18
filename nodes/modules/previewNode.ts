@@ -5,16 +5,20 @@ export const previewNode: NodeModule = {
   definition: {
     type: 'preview',
     label: 'Preview',
-    inputs: [{ id: 'in', label: 'In', type: 'vec3' }],
-    outputs: [{ id: 'out', label: 'Out', type: 'vec3' }],
+    // The Preview node is most commonly used to inspect color flow in the graph.
+    // Typing this as `color` prevents the node preview from treating it as a data vector
+    // and remapping it (which turns saturated colors like red into pink).
+    inputs: [{ id: 'in', label: 'In', type: 'color' }],
+    outputs: [{ id: 'out', label: 'Out', type: 'color' }],
   },
   ui: { sections: [] },
   glsl: {
     emit: ctx => {
-      const i = ctx.getInput(ctx.id, 'in', 'vec3(0.0)', 'vec3');
-      const v = ctx.varName(ctx.id);
+      const i = ctx.getInput(ctx.id, 'in', 'vec3(0.0)', 'color');
+      const v = ctx.varName(ctx.id, 'rgb');
       ctx.body.push(`vec3 ${v} = ${i};`);
-      ctx.variables[`${ctx.id}_out`] = { name: v, type: 'vec3' };
+      ctx.variables[`${ctx.id}_out`] = { name: v, type: 'color' };
+      ctx.variables[`${ctx.id}_rgb`] = { name: v, type: 'color' };
       return true;
     },
   },

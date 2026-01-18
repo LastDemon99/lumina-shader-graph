@@ -1,6 +1,40 @@
 import { ShaderNode, Connection, NodeType, SocketType, GradientStop } from '../types';
 import { getNodeModule } from '../nodes';
 
+// In node previews we need to decide whether a vec3/vec4 represents a *data vector*
+// (normals/positions/etc. -> remap [-1,1] to [0,1]) or a *color* (show lit result).
+// Defaulting vec3 to "vector" causes saturated colors like red (1,0,0) to appear pink
+// (1,0.5,0.5) due to the remap, so we only treat clearly vector-ish node types as vectors.
+const VECTOR_PREVIEW_NODE_TYPE_HINTS = [
+    'normal',
+    'tangent',
+    'bitangent',
+    'position',
+    'direction',
+    'screenPosition',
+    'viewDir',
+    'object',
+    'camera',
+];
+
+const isVectorPreviewNodeType = (nodeType: string): boolean => {
+    const t = String(nodeType);
+    // Exact matches for common semantic nodes
+    if (
+        t === 'normal' ||
+        t === 'tangent' ||
+        t === 'bitangent' ||
+        t === 'position' ||
+        t === 'screenPosition' ||
+        t === 'mainLightDirection' ||
+        t === 'object'
+    ) return true;
+
+    // Fuzzy matches for future/variant node names
+    const lower = t.toLowerCase();
+    return VECTOR_PREVIEW_NODE_TYPE_HINTS.some(h => lower.includes(h.toLowerCase()));
+};
+
 // Helper to determine required extensions based on used nodes
 const getRequiredExtensions = (nodes: ShaderNode[], mode: 'fragment' | 'vertex'): string => {
     const extensions = new Set<string>();
@@ -429,10 +463,33 @@ const processGraph = (nodes: ShaderNode[], connections: Connection[], targetNode
                 }
             }
 
-            // Detection of Vector types vs Color/Scalar for remapping
-            // We treat vec3/vec4 as "Data Vectors" (unlit remap) UNLESS they are explicitly colors or textures.
+            // Detection of Vector types vs Color/Scalar for previewing.
+            // - Data vectors (normals/positions/etc) use an unlit remap [-1,1] -> [0,1]
+            // - Colors use the lit preview path.
             const isColorVar = varDef?.name.includes('rgba') || varDef?.name.includes('rgb') || resultType === 'color';
-            const isVectorPreview = resultType.startsWith('vec') && !isColorVar;
+            const treatVecAsColor = (resultType === 'vec3' || resultType === 'vec4') && !isVectorPreviewNodeType(node.type);
+            const isColorPreview = isColorVar || treatVecAsColor;
+            const isVectorPreview = resultType.startsWith('vec') && !isColorPreview;
+
+            // Debugging aid: enable in DevTools with `window.__LUMINA_DEBUG_PREVIEW = true`
+            // Logs how the preview path was chosen (vector remap vs lit color).
+            try {
+                if ((globalThis as any).__LUMINA_DEBUG_PREVIEW) {
+                    // eslint-disable-next-line no-console
+                    console.debug('[Lumina][PreviewClassify]', {
+                        targetNodeId,
+                        nodeType: node.type,
+                        resultType,
+                        varName: varDef?.name,
+                        isColorVar,
+                        treatVecAsColor,
+                        isColorPreview,
+                        isVectorPreview,
+                    });
+                }
+            } catch {
+                // ignore
+            }
 
             if (isVectorPreview) {
                 // Vectors (Normals, Positions, etc) show raw remapped data [0,1]
@@ -446,7 +503,9 @@ const processGraph = (nodes: ShaderNode[], connections: Connection[], targetNode
 
                 // For node previews, we always use the geometry normal (vNormal) 
                 // to show how the "color" looks on a 3D surface.
-                body.push(`vec3 litPreview = applyLighting(${resultVar}, vNormal, viewDir, lightDir, lightColor, vec3(0.04), 0.5, 1.0);`);
+                // Keep node previews faithful to the underlying value: avoid adding a hard-coded
+                // specular highlight (which can tint saturated colors and look "washed out").
+                body.push(`vec3 litPreview = applyLighting(${resultVar}, vNormal, viewDir, lightDir, lightColor, vec3(0.0), 0.5, 1.0);`);
                 body.push(`gl_FragColor = vec4(pow(max(litPreview, 0.0), vec3(0.4545)), 1.0);`);
             }
         }

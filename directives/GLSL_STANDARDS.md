@@ -56,6 +56,39 @@ El módulo es responsable de:
 
 Si un nodo no emite (o retorna `false`), el generador puede aplicar un fallback mínimo para no romper compilación, pero esto debe tratarse como bug.
 
+### 3.2. Previews de Nodos: Clasificación “Color vs Vector”
+
+Cuando `glslGenerator.ts` genera el shader para **previsualizar un nodo** (miniatura en el grafo), tiene que decidir cómo mostrar el resultado:
+
+1. **Color (RGB/RGBA)**: se muestra usando el camino “lit preview” (iluminación + gamma) para que coincida con el look del Master.
+2. **Vector de datos (Normal/Posición/Dirección/etc.)**: se muestra como dato remapeado (unlit) para hacerlo visible.
+
+#### Remapeo de Vectores
+Para vectores de datos se usa el estándar:
+
+```glsl
+// [-1,1] -> [0,1]
+vec3 shown = value * 0.5 + 0.5;
+```
+
+Si este remapeo se aplica por error a un color, los colores saturados se “lavan”. Ejemplo clásico:
+`vec3(1,0,0)` (rojo) → `vec3(1,0.5,0.5)` (rosa).
+
+#### Regla actual (para evitar colores lavados)
+En previews, `vec3/vec4` se tratan como **color por defecto**, excepto si el `node.type` es claramente vectorial.
+La heurística vive en `services/glslGenerator.ts` (búsqueda por pistas: normal/position/tangent/bitangent/screenPosition/direction/etc.).
+
+#### Reglas para autores de nodos (modules)
+- Si tu nodo representa color, tipa outputs/variables como `color` cuando sea posible.
+- Si tu nodo representa un vector de datos, usa un `type` semántico (ej. `normal`, `position`, `tangent`) para que el preview aplique el remapeo correctamente.
+- Si introduces un nuevo nodo vectorial con un nombre distinto, añade su pista a la lista de clasificación en `services/glslGenerator.ts`.
+
+#### Debug
+Para diagnosticar decisiones de clasificación, en DevTools puedes activar:
+`window.__LUMINA_DEBUG_PREVIEW = true`
+
+Esto imprime en consola `[Lumina][PreviewClassify]` con el motivo (tipo inferido, si se trata como color o vector, etc.).
+
 ### 3.1. Manejo de Inputs Especiales (Enums de UI)
 Los nodos con Dropdowns (como `Rotate`, `Twirl` o `UV`) almacenan strings en `data.inputValues` cuando el usuario selecciona una opción en lugar de conectar un cable.
 
