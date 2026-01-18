@@ -9,6 +9,7 @@ export const sampleTexture2DArrayNode: NodeModule = {
       { id: 'texture', label: 'Texture Array', type: 'textureArray' },
       { id: 'uv', label: 'UV', type: 'vec2' },
       { id: 'index', label: 'Index', type: 'float' },
+      { id: 'sampler', label: 'Sampler (SS)', type: 'samplerState' },
     ],
     outputs: [
       { id: 'rgba', label: 'RGBA', type: 'vec4' },

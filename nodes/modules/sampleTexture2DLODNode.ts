@@ -8,6 +8,7 @@ export const sampleTexture2DLODNode: NodeModule = {
     inputs: [
       { id: 'texture', label: 'Texture', type: 'texture' },
       { id: 'uv', label: 'UV', type: 'vec2' },
+      { id: 'sampler', label: 'Sampler (SS)', type: 'samplerState' },
       { id: 'lod', label: 'LOD', type: 'float' },
     ],
     outputs: [

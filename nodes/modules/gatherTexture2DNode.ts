@@ -8,6 +8,7 @@ export const gatherTexture2DNode: NodeModule = {
     inputs: [
       { id: 'texture', label: 'Texture', type: 'texture' },
       { id: 'uv', label: 'UV', type: 'vec2' },
+      { id: 'sampler', label: 'Sampler (SS)', type: 'samplerState' },
       { id: 'offset', label: 'Offset', type: 'vec2' },
     ],
     outputs: [

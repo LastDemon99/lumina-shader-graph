@@ -8,6 +8,7 @@ export const textureNode: NodeModule = {
     inputs: [
       { id: 'texture', label: 'Texture', type: 'texture' },
       { id: 'uv', label: 'UV', type: 'vec2' },
+      { id: 'sampler', label: 'Sampler (SS)', type: 'samplerState' },
     ],
     outputs: [
       { id: 'rgba', label: 'RGBA', type: 'vec4' },
