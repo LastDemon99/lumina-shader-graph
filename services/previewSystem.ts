@@ -1,6 +1,6 @@
 
 import { createWebGLContext, createProgram, loadTexture, createPlaceholderTexture, applyTextureParams } from './webglUtils';
-import { createQuad, createSphere, mat4 } from './renderUtils';
+import { createQuad, createSphere, createCube, createPlane, mat4 } from './renderUtils';
 
 interface TextureConfig {
     url: string;
@@ -14,6 +14,8 @@ interface RenderItem {
     fragShader: string;
     vertShader: string;
     mode: '2d' | '3d';
+    previewObject?: 'sphere' | 'box' | 'quad';
+    rotation?: { x: number; y: number };
     textures: Record<string, TextureConfig>;
     timestamp: number; // For LRU caching of programs if needed
 }
@@ -39,6 +41,8 @@ class PreviewSystem {
     // Shared Geometry Buffers
     private quadGeo: GLGeometry | null = null;
     private sphereGeo: GLGeometry | null = null;
+    private boxGeo: GLGeometry | null = null;
+    private planeGeo: GLGeometry | null = null;
 
     private animationFrameId: number | null = null;
 
@@ -56,6 +60,8 @@ class PreviewSystem {
         // Upload geometry once
         this.quadGeo = this.uploadGeometry(this.gl, createQuad());
         this.sphereGeo = this.uploadGeometry(this.gl, createSphere(0.8, 32, 32));
+        this.boxGeo = this.uploadGeometry(this.gl, createCube());
+        this.planeGeo = this.uploadGeometry(this.gl, createPlane());
 
         this.startLoop();
     }
@@ -113,6 +119,8 @@ class PreviewSystem {
             };
             cleanupGeo(this.quadGeo);
             cleanupGeo(this.sphereGeo);
+            cleanupGeo(this.boxGeo);
+            cleanupGeo(this.planeGeo);
 
             this.items.clear();
             this.programs.forEach(p => this.gl!.deleteProgram(p));
@@ -128,6 +136,13 @@ class PreviewSystem {
 
     register(id: string, data: Omit<RenderItem, 'timestamp'>) {
         this.items.set(id, { ...data, timestamp: Date.now() });
+    }
+
+    updateRotation(id: string, rotation: { x: number, y: number }) {
+        const item = this.items.get(id);
+        if (item) {
+            item.rotation = rotation;
+        }
     }
 
     unregister(id: string) {
@@ -239,7 +254,15 @@ class PreviewSystem {
         gl.useProgram(program!);
 
         // 3. Geometry
-        const geo = item.mode === '3d' ? this.sphereGeo : this.quadGeo;
+        let geo = this.sphereGeo;
+        if (item.mode === '3d') {
+            if (item.previewObject === 'box') geo = this.boxGeo;
+            else if (item.previewObject === 'quad') geo = this.planeGeo;
+            else geo = this.sphereGeo;
+        } else {
+            geo = this.quadGeo;
+        }
+
         if (!geo) return;
 
         this.bindAttribute(program!, 'position', geo.position, 3);
@@ -258,10 +281,19 @@ class PreviewSystem {
 
         if (item.mode === '3d') {
             mat4.perspective(projection, Math.PI / 4, aspect, 0.1, 100.0);
-            mat4.lookAt(view, [0, 0, 2.5], [0, 0, 0], [0, 1, 0]);
+
+            // Adjust camera distance based on shape
+            let dist = 2.5;
+            if (item.previewObject === 'box') dist = 4.5;
+            else if (item.previewObject === 'quad') dist = 3.2;
+
+            mat4.lookAt(view, [0, 0, dist], [0, 0, 0], [0, 1, 0]);
+
             mat4.identity(model);
-            mat4.rotateX(model, model, 0.5);
-            mat4.rotateY(model, model, 0.5);
+            const rotX = item.rotation?.x ?? 0.5;
+            const rotY = item.rotation?.y ?? 0.5;
+            mat4.rotateX(model, model, rotX);
+            mat4.rotateY(model, model, rotY);
         } else {
             mat4.identity(projection);
             mat4.identity(view);
@@ -284,6 +316,10 @@ class PreviewSystem {
         if (uBoundsMin) gl.uniform3f(uBoundsMin, -0.8, -0.8, -0.8);
         const uBoundsMax = gl.getUniformLocation(program!, 'u_boundsMax');
         if (uBoundsMax) gl.uniform3f(uBoundsMax, 0.8, 0.8, 0.8);
+
+        // Preview Mode: 0 for 2D/Unlit, 1 for 3D/Lit
+        const uPreviewMode = gl.getUniformLocation(program!, 'u_previewMode');
+        if (uPreviewMode) gl.uniform1i(uPreviewMode, item.mode === '3d' ? 1 : 0);
 
         const uTime = gl.getUniformLocation(program!, 'u_time');
         if (uTime) gl.uniform1f(uTime, time * 0.001);

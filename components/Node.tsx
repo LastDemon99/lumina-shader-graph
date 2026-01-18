@@ -8,7 +8,7 @@ import { ShaderNode, SocketType, Connection, GradientStop } from '../types';
 import { Preview } from './Preview';
 import { generateGLSL } from '../services/glslGenerator';
 import { processTextureFile, createTextureAtlas } from '../services/textureUtils';
-import { Upload, ArrowRight, Box, Square, CheckSquare, Square as SquareIcon, Image as ImageIcon, Loader2, Plus, X, ChevronDown, Check, ChevronUp, Layers, ChevronRight, Trash2 } from 'lucide-react';
+import { Upload, ArrowRight, Box, Square, CheckSquare, Square as SquareIcon, Image as ImageIcon, Loader2, Plus, X, ChevronDown, Check, ChevronUp, Layers, ChevronRight, Trash2, Circle, AppWindow } from 'lucide-react';
 import { getNodeModule } from '../nodes';
 import { getEffectiveSockets } from '../nodes/runtime';
 import { NodeModuleUI } from './NodeModuleUI';
@@ -535,7 +535,7 @@ export const Node: React.FC<NodeProps> = ({
     return (
         <div
             id={`node-${node.id}`}
-            className={`absolute ${isWide ? 'w-60' : 'w-40'} rounded-lg shadow-xl border ${selected ? 'border-blue-500 shadow-blue-500/30' : 'border-[#111]'} bg-[#1e1e1e] flex flex-col z-auto`}
+            className={`absolute ${isWide ? 'w-60' : 'w-44'} rounded-lg shadow-xl border ${selected ? 'border-blue-500 shadow-blue-500/30' : 'border-[#111]'} bg-[#1e1e1e] flex flex-col z-auto`}
             style={{ left: node.x, top: node.y }}
         >
             {/* Header */}
@@ -592,6 +592,33 @@ export const Node: React.FC<NodeProps> = ({
                                     >
                                         <Box className="w-2.5 h-2.5" />
                                     </button>
+
+                                    {previewMode === '3d' && (
+                                        <>
+                                            <div className="w-[1px] h-3 bg-gray-800 mx-0.5" />
+                                            <button
+                                                onClick={(e) => { e.stopPropagation(); onUpdateData(node.id, { previewObject: 'sphere' }); }}
+                                                className={`p-0.5 rounded hover:bg-white/10 ${node.data.previewObject === 'sphere' || !node.data.previewObject ? 'text-blue-400' : 'text-gray-500'}`}
+                                                title="Sphere"
+                                            >
+                                                <Circle className="w-2.5 h-2.5" />
+                                            </button>
+                                            <button
+                                                onClick={(e) => { e.stopPropagation(); onUpdateData(node.id, { previewObject: 'box' }); }}
+                                                className={`p-0.5 rounded hover:bg-white/10 ${node.data.previewObject === 'box' ? 'text-blue-400' : 'text-gray-500'}`}
+                                                title="Box"
+                                            >
+                                                <Box className="w-2.5 h-2.5" />
+                                            </button>
+                                            <button
+                                                onClick={(e) => { e.stopPropagation(); onUpdateData(node.id, { previewObject: 'quad' }); }}
+                                                className={`p-0.5 rounded hover:bg-white/10 ${node.data.previewObject === 'quad' ? 'text-blue-400' : 'text-gray-500'}`}
+                                                title="Quad"
+                                            >
+                                                <AppWindow className="w-2.5 h-2.5" />
+                                            </button>
+                                        </>
+                                    )}
                                 </div>
                             )}
                         </div>
@@ -605,6 +632,9 @@ export const Node: React.FC<NodeProps> = ({
                                     mode={previewMode}
                                     textures={textureUniforms}
                                     nodeId={node.id}
+                                    previewObject={node.data.previewObject}
+                                    rotation={node.data.previewRotation}
+                                    onRotationChange={(newRot) => onUpdateData(node.id, { previewRotation: newRot })}
                                 />
                             )}
                         </div>
@@ -698,6 +728,6 @@ export const Node: React.FC<NodeProps> = ({
                     </div>
                 </div>
             </div>
-        </div>
+        </div >
     );
 };

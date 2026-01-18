@@ -158,6 +158,7 @@ const UNIFORMS = `
   uniform mat4 u_projection;
   uniform mat4 u_model_inv;
   uniform mat4 u_view_inv;
+  uniform int u_previewMode; // 0 = 2D (Unlit), 1 = 3D (Lit)
 `;
 
 const VARYINGS = `
@@ -506,7 +507,10 @@ const processGraph = (nodes: ShaderNode[], connections: Connection[], targetNode
                 // Keep node previews faithful to the underlying value: avoid adding a hard-coded
                 // specular highlight (which can tint saturated colors and look "washed out").
                 body.push(`vec3 litPreview = applyLighting(${resultVar}, vNormal, viewDir, lightDir, lightColor, vec3(0.0), 0.5, 1.0);`);
-                body.push(`gl_FragColor = vec4(pow(max(litPreview, 0.0), vec3(0.4545)), 1.0);`);
+
+                // If u_previewMode is 0 (2D), use raw unlit result. If 1 (3D), use lit preview.
+                body.push(`vec3 finalPreview = u_previewMode == 1 ? litPreview : ${resultVar};`);
+                body.push(`gl_FragColor = vec4(pow(max(finalPreview, 0.0), vec3(0.4545)), 1.0);`);
             }
         }
     } else if (mode === 'fragment') {
