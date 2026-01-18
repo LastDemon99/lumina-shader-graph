@@ -45,7 +45,7 @@ const getSocketColor = (type: SocketType) => {
 
 const NO_PREVIEW_TYPES = ['float', 'slider', 'time', 'color', 'vector2', 'vector3', 'vector4', 'uv', 'output', 'vertex', 'gradient', 'screen', 'matrixConstruction', 'dielectricSpecular', 'position', 'mainLightDirection', 'object', 'samplerState', 'split', 'textureSize', 'camera', 'sceneDepth', 'sceneDepthDifference', 'flipbook', 'parallaxMapping', 'reciprocal'];
 
-const WIDE_NODE_TYPES = ['matrixConstruction', 'swizzle', 'channelMask', 'invertColors', 'split', 'slider', 'texture2DArrayAsset', 'transform', 'gradient', 'colorspaceConversion', 'dielectricSpecular', 'sceneDepth', 'sceneDepthDifference', 'parallaxMapping', 'reciprocal', 'polarCoordinates', 'radialShear'];
+const WIDE_NODE_TYPES = ['swizzle', 'channelMask', 'invertColors', 'split', 'slider', 'texture2DArrayAsset', 'transform', 'gradient', 'colorspaceConversion', 'dielectricSpecular', 'sceneDepth', 'sceneDepthDifference', 'parallaxMapping', 'reciprocal', 'polarCoordinates', 'radialShear'];
 
 const ThrottledColorInput: React.FC<{ value: string; onChange: (val: string) => void }> = ({ value, onChange }) => {
     const [localValue, setLocalValue] = useState(value);
@@ -384,7 +384,7 @@ export const Node: React.FC<NodeProps> = ({
             return (
                 <div className="flex flex-col gap-0.5 nodrag">
                     <div className="flex items-center bg-[#0a0a0a] rounded border border-gray-800 focus-within:border-blue-500">
-                        <span className="text-[8px] text-red-400 pl-1 select-none font-bold">X</span>
+                        <span className="text-[8px] text-red-400 pl-1 select-none font-bold w-2">X</span>
                         <input
                             type="number" step="0.1"
                             className="w-10 h-3.5 bg-transparent text-[9px] text-gray-300 px-1 outline-none text-right"
@@ -394,7 +394,7 @@ export const Node: React.FC<NodeProps> = ({
                         />
                     </div>
                     <div className="flex items-center bg-[#0a0a0a] rounded border border-gray-800 focus-within:border-blue-500">
-                        <span className="text-[8px] text-green-400 pl-1 select-none font-bold">Y</span>
+                        <span className="text-[8px] text-green-400 pl-1 select-none font-bold w-2">Y</span>
                         <input
                             type="number" step="0.1"
                             className="w-10 h-3.5 bg-transparent text-[9px] text-gray-300 px-1 outline-none text-right"
@@ -448,42 +448,42 @@ export const Node: React.FC<NodeProps> = ({
         if (type === 'vec4') {
             const vec = (val && typeof val === 'object') ? val : { x: 0, y: 0, z: 0, w: 0 };
             return (
-                <div className="flex gap-0.5 nodrag">
+                <div className="flex flex-col gap-0.5 nodrag">
                     <div className="flex items-center bg-[#0a0a0a] rounded border border-gray-800 focus-within:border-blue-500">
-                        <span className="text-[7px] text-red-400 pl-0.5 select-none font-bold">X</span>
+                        <span className="text-[8px] text-red-400 pl-1 select-none font-bold w-2">X</span>
                         <input
                             type="number" step="0.1"
-                            className="w-6 h-3.5 bg-transparent text-[8px] text-gray-300 px-0.5 outline-none text-right"
+                            className="w-10 h-3.5 bg-transparent text-[9px] text-gray-300 px-1 outline-none text-right"
                             value={vec.x}
                             onChange={(e) => handleVec4Change(socketId, 'x', e.target.value)}
                             onMouseDown={e => e.stopPropagation()}
                         />
                     </div>
                     <div className="flex items-center bg-[#0a0a0a] rounded border border-gray-800 focus-within:border-blue-500">
-                        <span className="text-[7px] text-green-400 pl-0.5 select-none font-bold">Y</span>
+                        <span className="text-[8px] text-green-400 pl-1 select-none font-bold w-2">Y</span>
                         <input
                             type="number" step="0.1"
-                            className="w-6 h-3.5 bg-transparent text-[8px] text-gray-300 px-0.5 outline-none text-right"
+                            className="w-10 h-3.5 bg-transparent text-[9px] text-gray-300 px-1 outline-none text-right"
                             value={vec.y}
                             onChange={(e) => handleVec4Change(socketId, 'y', e.target.value)}
                             onMouseDown={e => e.stopPropagation()}
                         />
                     </div>
                     <div className="flex items-center bg-[#0a0a0a] rounded border border-gray-800 focus-within:border-blue-500">
-                        <span className="text-[7px] text-blue-400 pl-0.5 select-none font-bold">Z</span>
+                        <span className="text-[8px] text-blue-400 pl-1 select-none font-bold w-2">Z</span>
                         <input
                             type="number" step="0.1"
-                            className="w-6 h-3.5 bg-transparent text-[8px] text-gray-300 px-0.5 outline-none text-right"
+                            className="w-10 h-3.5 bg-transparent text-[9px] text-gray-300 px-1 outline-none text-right"
                             value={vec.z}
                             onChange={(e) => handleVec4Change(socketId, 'z', e.target.value)}
                             onMouseDown={e => e.stopPropagation()}
                         />
                     </div>
                     <div className="flex items-center bg-[#0a0a0a] rounded border border-gray-800 focus-within:border-blue-500">
-                        <span className="text-[7px] text-gray-400 pl-0.5 select-none font-bold">W</span>
+                        <span className="text-[8px] text-gray-400 pl-1 select-none font-bold w-2">W</span>
                         <input
                             type="number" step="0.1"
-                            className="w-6 h-3.5 bg-transparent text-[8px] text-gray-300 px-0.5 outline-none text-right"
+                            className="w-10 h-3.5 bg-transparent text-[9px] text-gray-300 px-1 outline-none text-right"
                             value={vec.w}
                             onChange={(e) => handleVec4Change(socketId, 'w', e.target.value)}
                             onMouseDown={e => e.stopPropagation()}
