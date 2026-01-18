@@ -13,6 +13,7 @@ export const parallaxMappingNode: NodeModule = {
     outputs: [{ id: 'out', label: 'Out', type: 'vec2' }],
   },
   ui: {
+    preview: { enabled: true },
     sections: [
       {
         id: 'main',

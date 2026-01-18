@@ -17,7 +17,7 @@ export const swizzleNode: NodeModule = {
     outputs: [{ id: 'out', label: 'Out(4)', type: 'vec4' }],
   },
   ui: {
-    width: 'wide',
+    width: 'normal',
     preview: { enabled: true },
     sections: [
       {

@@ -509,8 +509,8 @@ const processGraph = (nodes: ShaderNode[], connections: Connection[], targetNode
                 body.push(`vec3 litPreview = applyLighting(${resultVar}, vNormal, viewDir, lightDir, lightColor, vec3(0.0), 0.5, 1.0);`);
 
                 // If u_previewMode is 0 (2D), use raw unlit result. If 1 (3D), use lit preview.
-                body.push(`vec3 finalPreview = u_previewMode == 1 ? litPreview : ${resultVar};`);
-                body.push(`gl_FragColor = vec4(pow(max(finalPreview, 0.0), vec3(0.4545)), 1.0);`);
+                body.push(`vec3 litPreviewGamma = pow(max(litPreview, 0.0), vec3(0.4545));`);
+                body.push(`gl_FragColor = u_previewMode == 1 ? vec4(litPreviewGamma, 1.0) : vec4(${resultVar}, 1.0);`);
             }
         }
     } else if (mode === 'fragment') {

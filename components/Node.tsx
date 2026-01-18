@@ -45,7 +45,7 @@ const getSocketColor = (type: SocketType) => {
 
 const NO_PREVIEW_TYPES = ['float', 'slider', 'time', 'color', 'vector2', 'vector3', 'vector4', 'uv', 'output', 'vertex', 'gradient', 'screen', 'matrixConstruction', 'dielectricSpecular', 'position', 'mainLightDirection', 'object', 'samplerState', 'split', 'textureSize', 'camera', 'sceneDepth', 'sceneDepthDifference', 'flipbook', 'parallaxMapping', 'reciprocal'];
 
-const WIDE_NODE_TYPES = ['swizzle', 'channelMask', 'invertColors', 'split', 'slider', 'texture2DArrayAsset', 'gradient', 'colorspaceConversion', 'dielectricSpecular', 'sceneDepth', 'sceneDepthDifference', 'parallaxMapping', 'reciprocal', 'polarCoordinates', 'radialShear'];
+const WIDE_NODE_TYPES = ['color', 'split', 'slider', 'texture2DArrayAsset', 'gradient', 'radialShear'];
 
 const ThrottledColorInput: React.FC<{ value: string; onChange: (val: string) => void }> = ({ value, onChange }) => {
     const [localValue, setLocalValue] = useState(value);
@@ -165,6 +165,7 @@ export const Node: React.FC<NodeProps> = ({
     const registryUi = nodeModule?.ui;
     const registrySocketRules = nodeModule?.socketRules;
 
+    // RULE: Priorities module-defined behavior over legacy centralized lists.
     const canShowPreview = registryUi?.preview ? registryUi.preview.enabled : !NO_PREVIEW_TYPES.includes(node.type);
     const isObjectNode = node.type === 'object';
     const isWide = registryUi?.width ? registryUi.width === 'wide' : WIDE_NODE_TYPES.includes(node.type);
@@ -682,7 +683,7 @@ export const Node: React.FC<NodeProps> = ({
                                                         onSocketMouseUp(e, node.id, socket.id, true, socket.type);
                                                     }}
                                                 >
-                                                    <div className={`w-2.5 h-2.5 rounded-full border border-[#111] ${getSocketColor(socket.type)} ${socket.enabled ? 'group-hover:scale-125' : ''} transition-transform z-10 shadow-sm`} />
+                                                    <div className={`w-3 h-3 rounded-full border border-[#111] ${getSocketColor(socket.type)} ${socket.enabled ? 'group-hover:scale-125' : ''} transition-transform z-10 shadow-sm`} />
                                                 </div>
                                                 <span className="text-[10px] text-gray-400 font-medium pointer-events-none">{socket.label}</span>
                                             </div>
@@ -720,7 +721,7 @@ export const Node: React.FC<NodeProps> = ({
                                                 onSocketMouseUp(e, node.id, socket.id, false, socket.type);
                                             }}
                                         >
-                                            <div className={`w-2.5 h-2.5 rounded-full border border-[#111] ${getSocketColor(socket.type)} ${socket.enabled ? 'group-hover:scale-125' : ''} transition-transform z-10 shadow-sm`} />
+                                            <div className={`w-3 h-3 rounded-full border border-[#111] ${getSocketColor(socket.type)} ${socket.enabled ? 'group-hover:scale-125' : ''} transition-transform z-10 shadow-sm`} />
                                         </div>
                                     </div>
                                 );

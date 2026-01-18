@@ -202,7 +202,7 @@ export const NodeModuleUI: React.FC<NodeModuleUIProps> = ({ ui, node, allConnect
               >
                 None
               </button>
-              <div className="grid grid-cols-4 gap-1 p-2">
+              <div className="flex flex-col gap-1 p-2">
                 {options.map(opt => {
                   const current = mask;
                   const isActive = current.includes(opt.value);

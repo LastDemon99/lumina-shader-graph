@@ -15,7 +15,7 @@ export const colorspaceConversionNode: NodeModule = {
     conversionTo: 'Linear',
   }),
   ui: {
-    width: 'wide',
+    width: 'normal',
     preview: { enabled: true },
     sections: [
       {

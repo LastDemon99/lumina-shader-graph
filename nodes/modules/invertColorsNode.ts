@@ -9,7 +9,7 @@ export const invertColorsNode: NodeModule = {
     outputs: [{ id: 'out', label: 'Out', type: 'vec4' }],
   },
   ui: {
-    width: 'wide',
+    width: 'normal',
     preview: { enabled: true },
     sections: [],
   },

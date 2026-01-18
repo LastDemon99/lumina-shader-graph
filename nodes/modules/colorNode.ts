@@ -9,7 +9,7 @@ export const colorNode: NodeModule = {
     outputs: [{ id: 'out', label: 'Out(3)', type: 'color' }],
   },
   ui: {
-    width: 'normal',
+    width: 'wide',
     preview: { enabled: false },
     sections: [
       {

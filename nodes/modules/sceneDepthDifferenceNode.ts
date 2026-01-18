@@ -17,7 +17,7 @@ export const sceneDepthDifferenceNode: NodeModule = {
     sceneDepthMode: 'Linear01',
   }),
   ui: {
-    width: 'wide',
+    width: 'normal',
     preview: { enabled: true },
     sections: [
       {
