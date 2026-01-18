@@ -104,8 +104,6 @@ export const transformNode: NodeModule = {
           // Tangent to World = TBN * Vector
           currentPos = `${v}_TBN * ${currentPos}`;
         }
-      } else if (from === 'Absolute World') {
-        // Absolute World and World are identical in this simple setup
       } else if (from === 'Screen') {
         // Placeholder for screen space inverse
       }
@@ -122,13 +120,13 @@ export const transformNode: NodeModule = {
           // World to Tangent = Transpose(TBN) * Vector 
           currentPos = `transpose(${v}_TBN) * ${currentPos}`;
         }
-      } else if (to === 'Absolute World') {
-        // World to Absolute World = Identity
       } else if (to === 'Screen') {
         if (type === 'Position') {
-          currentPos = `((u_projection * u_view * vec4(${currentPos}, 1.0)).xy / (u_projection * u_view * vec4(${currentPos}, 1.0)).w) * 0.5 + 0.5`;
+          ctx.body.push(`vec4 ${v}_clip = u_projection * u_view * vec4(${currentPos}, 1.0);`);
+          currentPos = `((${v}_clip.xy / ${v}_clip.w) * 0.5 + 0.5).xyy`;
         }
       }
+      // Note: If to === 'World' or 'Absolute World', it stays in World space from step 1.
 
       ctx.body.push(`vec3 ${v} = ${currentPos};`);
       ctx.variables[`${ctx.id}_out`] = { name: v, type: 'vec3' };

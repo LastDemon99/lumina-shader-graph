@@ -430,17 +430,22 @@ const processGraph = (nodes: ShaderNode[], connections: Connection[], targetNode
             }
 
             // Detection of Vector types vs Color/Scalar for remapping
-            const isVectorPreview = resultType.startsWith('vec') && resultType !== 'color';
+            // We treat vec3/vec4 as "Data Vectors" (unlit remap) UNLESS they are explicitly colors or textures.
+            const isColorVar = varDef?.name.includes('rgba') || varDef?.name.includes('rgb') || resultType === 'color';
+            const isVectorPreview = resultType.startsWith('vec') && !isColorVar;
 
             if (isVectorPreview) {
-                // Vectors (Normals, Positions, etc) remain unlit for data clarity
+                // Vectors (Normals, Positions, etc) show raw remapped data [0,1]
                 finalAssignment = `gl_FragColor = vec4(${resultVar} * 0.5 + 0.5, 1.0);`;
             } else {
-                // Colors and Scalars: Use Master Lighting Model for consistency
-                functions.add(LIGHTING_FUNCTIONS); // Ensure lighting is available
+                // Colors and Scalars: Use Master Lighting Model for visibility
+                functions.add(LIGHTING_FUNCTIONS);
                 body.push(`vec3 viewDir = normalize(u_cameraPosition - vPosition);`);
                 body.push(`vec3 lightDir = normalize(vec3(0.5, 1.0, 0.5));`);
                 body.push(`vec3 lightColor = vec3(1.0, 0.98, 0.95);`);
+
+                // For node previews, we always use the geometry normal (vNormal) 
+                // to show how the "color" looks on a 3D surface.
                 body.push(`vec3 litPreview = applyLighting(${resultVar}, vNormal, viewDir, lightDir, lightColor, vec3(0.04), 0.5, 1.0);`);
                 body.push(`gl_FragColor = vec4(pow(max(litPreview, 0.0), vec3(0.4545)), 1.0);`);
             }
