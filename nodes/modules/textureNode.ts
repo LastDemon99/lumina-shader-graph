@@ -19,7 +19,7 @@ export const textureNode: NodeModule = {
     ],
   },
   ui: {
-    width: 'wide',
+    width: 'normal',
     sections: [
       {
         id: 'source',

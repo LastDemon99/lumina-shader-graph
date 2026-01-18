@@ -9,7 +9,7 @@ export const transformNode: NodeModule = {
     outputs: [{ id: 'out', label: 'Out(3)', type: 'vec3' }],
   },
   ui: {
-    width: 'wide',
+    width: 'normal',
     sections: [
       {
         id: 'main',

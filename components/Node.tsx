@@ -45,7 +45,7 @@ const getSocketColor = (type: SocketType) => {
 
 const NO_PREVIEW_TYPES = ['float', 'slider', 'time', 'color', 'vector2', 'vector3', 'vector4', 'uv', 'output', 'vertex', 'gradient', 'screen', 'matrixConstruction', 'dielectricSpecular', 'position', 'mainLightDirection', 'object', 'samplerState', 'split', 'textureSize', 'camera', 'sceneDepth', 'sceneDepthDifference', 'flipbook', 'parallaxMapping', 'reciprocal'];
 
-const WIDE_NODE_TYPES = ['swizzle', 'channelMask', 'invertColors', 'split', 'slider', 'texture2DArrayAsset', 'transform', 'gradient', 'colorspaceConversion', 'dielectricSpecular', 'sceneDepth', 'sceneDepthDifference', 'parallaxMapping', 'reciprocal', 'polarCoordinates', 'radialShear'];
+const WIDE_NODE_TYPES = ['swizzle', 'channelMask', 'invertColors', 'split', 'slider', 'texture2DArrayAsset', 'gradient', 'colorspaceConversion', 'dielectricSpecular', 'sceneDepth', 'sceneDepthDifference', 'parallaxMapping', 'reciprocal', 'polarCoordinates', 'radialShear'];
 
 const ThrottledColorInput: React.FC<{ value: string; onChange: (val: string) => void }> = ({ value, onChange }) => {
     const [localValue, setLocalValue] = useState(value);
