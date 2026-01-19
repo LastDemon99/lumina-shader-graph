@@ -23,6 +23,25 @@ export const sliderNode: NodeModule = {
           },
         ],
       },
+      {
+        id: 'settings',
+        title: 'Range Settings',
+        layout: 'row',
+        controls: [
+          {
+            id: 'min',
+            label: 'Min',
+            controlType: 'number',
+            bind: { scope: 'data', key: 'minValue' },
+          },
+          {
+            id: 'max',
+            label: 'Max',
+            controlType: 'number',
+            bind: { scope: 'data', key: 'maxValue' },
+          },
+        ],
+      },
     ],
   },
   initialData: () => ({

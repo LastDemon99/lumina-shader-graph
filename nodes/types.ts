@@ -85,6 +85,7 @@ export interface ControlSpec {
 export interface UiSectionSpec {
   id: string;
   title?: string;
+  layout?: 'row';
   controls: ControlSpec[];
 }
 

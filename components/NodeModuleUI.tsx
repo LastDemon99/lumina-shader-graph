@@ -602,11 +602,13 @@ export const NodeModuleUI: React.FC<NodeModuleUIProps> = ({ ui, node, allConnect
           {section.title && (
             <div className="text-[9px] text-gray-500 font-semibold uppercase tracking-wide">{section.title}</div>
           )}
-          {section.controls.map(ctrl => (
-            <div key={ctrl.id} className="mb-1">
-              {renderControl(ctrl)}
-            </div>
-          ))}
+          <div className={section.layout === 'row' ? 'flex items-center gap-2' : 'flex flex-col gap-1'}>
+            {section.controls.map(ctrl => (
+              <div key={ctrl.id} className={`mb-1 ${section.layout === 'row' ? 'flex-1 min-w-0' : ''}`}>
+                {renderControl(ctrl)}
+              </div>
+            ))}
+          </div>
         </div>
       ))}
     </div>
