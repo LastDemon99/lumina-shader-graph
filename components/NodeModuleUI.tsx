@@ -77,20 +77,25 @@ export const NodeModuleUI: React.FC<NodeModuleUIProps> = ({ ui, node, allConnect
   const [activeStopId, setActiveStopId] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!maskOpenId) return;
+    if (!maskOpenId && !activeStopId) return;
 
     const handleClickOutside = (e: MouseEvent) => {
       // If we clicked outside the open dropdown (which has z-[100]), close it.
       // We check if the target is NOT part of the dropdown button or menu.
       const target = e.target as HTMLElement;
-      if (!target.closest('.dropdown-container')) {
+
+      if (maskOpenId && !target.closest(`.dropdown-container[data-node-id="${node.id}"]`)) {
         setMaskOpenId(null);
+      }
+
+      if (activeStopId && !target.closest(`.gradient-container[data-node-id="${node.id}"]`)) {
+        setActiveStopId(null);
       }
     };
 
-    window.addEventListener('mousedown', handleClickOutside);
-    return () => window.removeEventListener('mousedown', handleClickOutside);
-  }, [maskOpenId]);
+    window.addEventListener('mousedown', handleClickOutside, true);
+    return () => window.removeEventListener('mousedown', handleClickOutside, true);
+  }, [maskOpenId, activeStopId, node.id]);
 
   const removeArrayLayer = async (bindTarget: BindTarget, bindKey: string, index: number) => {
     const currentLayers: string[] = Array.isArray(getBoundValue(node, bindTarget, bindKey))
@@ -193,7 +198,7 @@ export const NodeModuleUI: React.FC<NodeModuleUIProps> = ({ ui, node, allConnect
       const options = control.multiSelectMask?.options ?? [];
 
       return (
-        <div className="relative w-full nodrag dropdown-container">
+        <div className="relative w-full nodrag dropdown-container" data-node-id={node.id}>
           <button
             className="w-full h-6 bg-[#0a0a0a] border border-gray-700 rounded flex items-center justify-between px-2 text-[10px] text-white hover:border-gray-500 transition-colors"
             onClick={(e) => {
@@ -483,7 +488,7 @@ export const NodeModuleUI: React.FC<NodeModuleUIProps> = ({ ui, node, allConnect
       const stops = getStops();
 
       return (
-        <div className="flex flex-col gap-2 nodrag">
+        <div className="flex flex-col gap-2 nodrag gradient-container" data-node-id={node.id}>
           <div className="flex items-center justify-between">
             <span className="text-[9px] text-gray-400 font-semibold">{control.label}</span>
             <button
