@@ -855,7 +855,7 @@ const App: React.FC = () => {
                       <div className="w-[1px] h-3 bg-gray-600 mx-1" />
                       <button onClick={() => setPreviewObject('sphere')} className={`p-1 rounded hover:bg-gray-600 ${previewObject === 'sphere' ? 'text-blue-400' : 'text-gray-400'}`} title="Sphere"> <Circle className="w-3 h-3" /> </button>
                       <button onClick={() => setPreviewObject('cube')} className={`p-1 rounded hover:bg-gray-600 ${previewObject === 'cube' ? 'text-blue-400' : 'text-gray-400'}`} title="Cube"> <Box className="w-3 h-3" /> </button>
-                      <button onClick={() => setPreviewObject('plane')} className={`p-1 rounded hover:bg-gray-600 ${previewObject === 'plane' ? 'text-blue-400' : 'text-gray-400'}`} title="Plane"> <AppWindow className="w-3 h-3" /> </button>
+                      <button onClick={() => setPreviewObject('plane')} className={`p-1 rounded hover:bg-gray-600 ${previewObject === 'plane' ? 'text-blue-400' : 'text-gray-400'}`} title="Plane"> <Square className="w-3 h-3" /> </button>
                     </>
                   )}
                 </div>

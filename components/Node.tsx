@@ -629,7 +629,7 @@ export const Node: React.FC<NodeProps> = ({
                                                 className={`p-0.5 rounded hover:bg-white/10 ${node.data.previewObject === 'quad' ? 'text-blue-400' : 'text-gray-500'}`}
                                                 title="Quad"
                                             >
-                                                <AppWindow className="w-2.5 h-2.5" />
+                                                <Square className="w-2.5 h-2.5" />
                                             </button>
                                         </>
                                     )}
