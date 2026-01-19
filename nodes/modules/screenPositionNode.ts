@@ -14,7 +14,6 @@ export const screenPositionNode: NodeModule = {
     screenPositionMode: 'Default',
   }),
   ui: {
-    width: 'wide',
     preview: { enabled: true },
     sections: [
       {
@@ -59,7 +58,7 @@ export const screenPositionNode: NodeModule = {
             `vec4 ${v} = vec4(((gl_FragCoord.xy - u_viewPort.xy) / u_viewPort.zw) * 2.0 - 1.0, 0.0, 1.0);`
           );
         } else if (positionMode === 'Tiled') {
-          ctx.body.push(`vec4 ${v} = vec4((gl_FragCoord.xy - u_viewPort.xy) / u_viewPort.w, 0.0, 1.0);`);
+          ctx.body.push(`vec4 ${v} = vec4(fract((gl_FragCoord.xy - u_viewPort.xy) / (u_viewPort.w * 0.5)), 0.0, 1.0);`);
         } else if (positionMode === 'Pixel') {
           ctx.body.push(`vec4 ${v} = vec4(gl_FragCoord.xy - u_viewPort.xy, 0.0, 1.0);`);
         }
