@@ -512,12 +512,23 @@ const App: React.FC = () => {
 
         const newSelection = new Set(e.ctrlKey ? selectedNodeIds : []);
         nodes.forEach(node => {
-          const nodeX = (node.x * viewport.zoom) + viewport.x;
-          const nodeY = (node.y * viewport.zoom) + viewport.y;
-          const nodeW = 160 * viewport.zoom;
-          const nodeH = 150 * viewport.zoom;
-          if (startX < nodeX + nodeW && endX > nodeX && startY < nodeY + nodeH && endY > nodeY) {
-            newSelection.add(node.id);
+          const el = document.getElementById(`node-${node.id}`);
+          if (el) {
+            const nodeRect = el.getBoundingClientRect();
+            // Calculate coordinates relative to the canvas container (same space as selectionBox)
+            const canvasRect = canvasRef.current!.getBoundingClientRect();
+            const nodeLeft = nodeRect.left - canvasRect.left;
+            const nodeTop = nodeRect.top - canvasRect.top;
+
+            // Check intersection (AABB)
+            if (
+              startX < nodeLeft + nodeRect.width &&
+              endX > nodeLeft &&
+              startY < nodeTop + nodeRect.height &&
+              endY > nodeTop
+            ) {
+              newSelection.add(node.id);
+            }
           }
         });
         setSelectedNodeIds(newSelection);
