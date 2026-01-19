@@ -173,24 +173,36 @@ const toGLSL = (val: any, type: SocketType, mode: 'fragment' | 'vertex' = 'fragm
         const f = Number(val);
         const s = f.toFixed(5);
         if (type === 'float') return s;
-        if (type === 'vec2') return `vec2(${s}, ${s})`;
-        if (type === 'vec3') return `vec3(${s}, ${s}, ${s})`;
-        if (type === 'vec4') return `vec4(${s}, ${s}, ${s}, ${s})`;
+        if (type === 'vec2') return `vec2(${s})`;
+        if (type === 'vec3') return `vec3(${s})`;
+        if (type === 'vec4') return `vec4(${s})`;
     }
 
-    if (type === 'float') return Number(val || 0).toFixed(5);
-    if (type === 'vec2') return `vec2(${Number(val?.x || 0).toFixed(5)}, ${Number(val?.y || 0).toFixed(5)})`;
+    const getVal = (v: any, prop: string, fallback: number = 0) => {
+        if (typeof v === 'number') return v;
+        if (typeof v === 'string') {
+            const f = parseFloat(v);
+            return isNaN(f) ? fallback : f;
+        }
+        if (typeof v === 'object' && v !== null) {
+            const f = parseFloat(v[prop]);
+            return isNaN(f) ? fallback : f;
+        }
+        return fallback;
+    };
+
+    if (type === 'float') return getVal(val, 'x').toFixed(5);
+    if (type === 'vec2') return `vec2(${getVal(val, 'x').toFixed(5)}, ${getVal(val, 'y').toFixed(5)})`;
     if (type === 'vec3') {
         if (typeof val === 'string' && val.startsWith('#')) {
-            // Hex color
             const r = parseInt(val.substr(1, 2), 16) / 255;
             const g = parseInt(val.substr(3, 2), 16) / 255;
             const b = parseInt(val.substr(5, 2), 16) / 255;
             return `vec3(${r.toFixed(3)}, ${g.toFixed(3)}, ${b.toFixed(3)})`;
         }
-        return `vec3(${Number(val?.x || 0).toFixed(5)}, ${Number(val?.y || 0).toFixed(5)}, ${Number(val?.z || 0).toFixed(5)})`;
+        return `vec3(${getVal(val, 'x').toFixed(5)}, ${getVal(val, 'y').toFixed(5)}, ${getVal(val, 'z').toFixed(5)})`;
     }
-    if (type === 'vec4') return `vec4(${Number(val?.x || 0).toFixed(5)}, ${Number(val?.y || 0).toFixed(5)}, ${Number(val?.z || 0).toFixed(5)}, ${Number(val?.w || 0).toFixed(5)})`;
+    if (type === 'vec4') return `vec4(${getVal(val, 'x').toFixed(5)}, ${getVal(val, 'y').toFixed(5)}, ${getVal(val, 'z').toFixed(5)}, ${getVal(val, 'w').toFixed(5)})`;
     return '0.0';
 };
 
@@ -326,6 +338,11 @@ const processGraph = (nodes: ShaderNode[], connections: Connection[], targetNode
         // 3. Fallback to node-specific defaults (Slider, Color) if not strictly an input socket but a value container
         if (node && (node.type === 'float' || node.type === 'color' || node.type === 'slider')) {
             return toGLSL(node.data.value, type, mode);
+        }
+
+        // 4. Final Fallback (Sanitize literal defaults like '0.0' or '1.0' into type-correct constructors like vec3(1.0))
+        if (!isNaN(parseFloat(defaultVal)) && !defaultVal.includes('(')) {
+            return toGLSL(defaultVal, type, mode);
         }
 
         return defaultVal;
