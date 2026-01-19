@@ -76,6 +76,22 @@ export const NodeModuleUI: React.FC<NodeModuleUIProps> = ({ ui, node, allConnect
   const [maskOpenId, setMaskOpenId] = useState<string | null>(null);
   const [activeStopId, setActiveStopId] = useState<string | null>(null);
 
+  useEffect(() => {
+    if (!maskOpenId) return;
+
+    const handleClickOutside = (e: MouseEvent) => {
+      // If we clicked outside the open dropdown (which has z-[100]), close it.
+      // We check if the target is NOT part of the dropdown button or menu.
+      const target = e.target as HTMLElement;
+      if (!target.closest('.dropdown-container')) {
+        setMaskOpenId(null);
+      }
+    };
+
+    window.addEventListener('mousedown', handleClickOutside);
+    return () => window.removeEventListener('mousedown', handleClickOutside);
+  }, [maskOpenId]);
+
   const removeArrayLayer = async (bindTarget: BindTarget, bindKey: string, index: number) => {
     const currentLayers: string[] = Array.isArray(getBoundValue(node, bindTarget, bindKey))
       ? (getBoundValue(node, bindTarget, bindKey) as string[])
@@ -177,7 +193,7 @@ export const NodeModuleUI: React.FC<NodeModuleUIProps> = ({ ui, node, allConnect
       const options = control.multiSelectMask?.options ?? [];
 
       return (
-        <div className="relative w-full nodrag">
+        <div className="relative w-full nodrag dropdown-container">
           <button
             className="w-full h-6 bg-[#0a0a0a] border border-gray-700 rounded flex items-center justify-between px-2 text-[10px] text-white hover:border-gray-500 transition-colors"
             onClick={(e) => {
@@ -191,7 +207,7 @@ export const NodeModuleUI: React.FC<NodeModuleUIProps> = ({ ui, node, allConnect
           </button>
 
           {isOpen && (
-            <div className="absolute top-full left-0 w-full bg-[#1e1e1e] border border-gray-600 rounded shadow-2xl mt-1 flex flex-col overflow-hidden z-[100]">
+            <div className="absolute top-full left-0 w-full bg-[#1e1e1e] border border-gray-600 rounded shadow-2xl mt-1 flex flex-col overflow-hidden z-[100] scale-in-center">
               <button
                 className="px-2 py-1.5 text-[9px] text-left text-gray-300 hover:bg-gray-700 hover:text-white border-b border-gray-800"
                 onClick={(e) => {
