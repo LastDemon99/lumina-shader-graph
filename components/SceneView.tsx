@@ -19,6 +19,7 @@ interface SceneViewProps {
     forcedMesh?: 'cube' | 'sphere' | 'plane';
     autoRotate?: boolean;
     cameraDistance?: number;
+    mode?: '2d' | '3d';
 }
 
 export const SceneView: React.FC<SceneViewProps> = ({
@@ -29,7 +30,8 @@ export const SceneView: React.FC<SceneViewProps> = ({
     showControls = true,
     forcedMesh,
     autoRotate = false,
-    cameraDistance = 4.0
+    cameraDistance = 4.0,
+    mode = '3d'
 }) => {
     const canvasRef = useRef<HTMLCanvasElement>(null);
     const glRef = useRef<WebGLRenderingContext | null>(null);
@@ -165,6 +167,10 @@ export const SceneView: React.FC<SceneViewProps> = ({
 
             gl.useProgram(programRef.current);
 
+            // Enable Alpha Blending for Master Preview transparency
+            gl.enable(gl.BLEND);
+            gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+
             // --- BIND TEXTURES ---
             if (missingTextureRef.current) {
                 gl.activeTexture(gl.TEXTURE0);
@@ -247,15 +253,21 @@ export const SceneView: React.FC<SceneViewProps> = ({
             const modelInv = new Float32Array(16);
             const viewInv = new Float32Array(16);
 
-            mat4.perspective(projection, Math.PI / 4, aspect, 0.1, 100.0);
-            mat4.lookAt(view, [0, 0, cameraDistance], [0, 0, 0], [0, 1, 0]);
-            mat4.identity(model);
-
-            if (autoRotate) {
-                mat4.rotateY(model, model, time * 0.001);
+            if (mode === '2d') {
+                mat4.identity(projection);
+                mat4.identity(view);
+                mat4.identity(model);
             } else {
-                mat4.rotateX(model, model, rotation.y);
-                mat4.rotateY(model, model, rotation.x);
+                mat4.perspective(projection, Math.PI / 4, aspect, 0.1, 100.0);
+                mat4.lookAt(view, [0, 0, cameraDistance], [0, 0, 0], [0, 1, 0]);
+                mat4.identity(model);
+
+                if (autoRotate) {
+                    mat4.rotateY(model, model, time * 0.001);
+                } else {
+                    mat4.rotateX(model, model, rotation.y);
+                    mat4.rotateY(model, model, rotation.x);
+                }
             }
 
             mat4.invert(modelInv, model);
@@ -267,6 +279,7 @@ export const SceneView: React.FC<SceneViewProps> = ({
             const uModelInv = gl.getUniformLocation(programRef.current, 'u_model_inv');
             const uViewInv = gl.getUniformLocation(programRef.current, 'u_view_inv');
             const uTime = gl.getUniformLocation(programRef.current, 'u_time');
+            const uPreviewModeLoc = gl.getUniformLocation(programRef.current, 'u_previewMode');
 
             gl.uniformMatrix4fv(uProj, false, projection);
             gl.uniformMatrix4fv(uView, false, view);
@@ -276,6 +289,7 @@ export const SceneView: React.FC<SceneViewProps> = ({
             if (uViewInv) gl.uniformMatrix4fv(uViewInv, false, viewInv);
 
             gl.uniform1f(uTime, time / 1000);
+            if (uPreviewModeLoc) gl.uniform1i(uPreviewModeLoc, mode === '3d' ? 1 : 0);
 
             // Viewport Uniform (Full screen for Scene View)
             const uViewPort = gl.getUniformLocation(programRef.current, 'u_viewPort');

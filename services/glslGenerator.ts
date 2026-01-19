@@ -514,11 +514,19 @@ const processGraph = (nodes: ShaderNode[], connections: Connection[], targetNode
             body.push(`vec3 lighting = applyLighting(${color}, ${normal}, viewDir, lightDir, lightColor, ${specular}, ${smoothness}, ${occlusion});`);
 
             // Apply Adaptive Gamma Correction to Final Output (matches node previews)
+            // Modified to respect u_previewMode: 0 = 2D Raw (Unlit), 1 = 3D Lit
             body.push(`
-                vec3 _finalLighting = max(lighting + ${emission}, 0.0);
-                float _finalLuma = dot(_finalLighting, vec3(0.3333));
-                vec3 _finalGamma = pow(_finalLighting, vec3(0.4545));
-                vec3 finalColor = mix(_finalGamma, _finalLighting, smoothstep(0.0, 0.5, _finalLuma));
+                vec3 finalColor;
+                if (u_previewMode == 1) {
+                    // 3D Lit Mode with Gamma
+                    vec3 _finalLighting = max(lighting + ${emission}, 0.0);
+                    float _finalLuma = dot(_finalLighting, vec3(0.3333));
+                    vec3 _finalGamma = pow(_finalLighting, vec3(0.4545));
+                    finalColor = mix(_finalGamma, _finalLighting, smoothstep(0.0, 0.5, _finalLuma));
+                } else {
+                    // 2D Unlit Raw Mode (No Gamma, No Lighting)
+                    finalColor = ${color} + ${emission};
+                }
                 gl_FragColor = vec4(finalColor, ${alpha});
             `.trim());
         } else {

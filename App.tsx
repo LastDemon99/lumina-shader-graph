@@ -11,7 +11,7 @@ import { ShaderNode, Connection, Viewport, NodeType, SocketType } from './types'
 import { INITIAL_NODES, INITIAL_CONNECTIONS } from './initialGraph';
 import { NODE_LIST, getNodeModule } from './nodes';
 import { getEffectiveSockets } from './nodes/runtime';
-import { Wand2, Download, Upload, ZoomIn, ZoomOut, MousePointer2, Box, Square, Save, Layers, Network, CheckCircle2, Loader2, Sparkles, FileJson, AlertCircle, Plus, FilePlus } from 'lucide-react';
+import { Wand2, Download, Upload, ZoomIn, ZoomOut, MousePointer2, Box, Square, Save, Layers, Network, CheckCircle2, Loader2, Sparkles, FileJson, AlertCircle, Plus, FilePlus, Circle, AppWindow } from 'lucide-react';
 
 const App: React.FC = () => {
   const getDefinitionOrPlaceholder = useCallback((type: string) => {
@@ -56,6 +56,7 @@ const App: React.FC = () => {
 
   // Preview State (Mini preview in Graph)
   const [previewMode, setPreviewMode] = useState<'2d' | '3d'>('3d');
+  const [previewObject, setPreviewObject] = useState<'sphere' | 'cube' | 'plane'>('sphere');
 
   // Interaction State
   const [isDraggingNodes, setIsDraggingNodes] = useState(false);
@@ -845,9 +846,18 @@ const App: React.FC = () => {
             <div className="w-full h-72 bg-black rounded-lg overflow-hidden border border-gray-700 shadow-xl relative group">
               <div className="absolute top-0 left-0 right-0 bg-gray-800/80 text-xs px-2 py-1 text-gray-400 font-bold border-b border-gray-700 z-10 flex justify-between items-center backdrop-blur-sm">
                 <span>PREVIEW</span>
-                <div className="flex gap-1">
-                  <button onClick={() => setPreviewMode('2d')} className={`p-1 rounded hover:bg-gray-600 ${previewMode === '2d' ? 'text-white bg-gray-600' : ''}`}> <Square className="w-3 h-3" /> </button>
-                  <button onClick={() => setPreviewMode('3d')} className={`p-1 rounded hover:bg-gray-600 ${previewMode === '3d' ? 'text-white bg-gray-600' : ''}`}> <Box className="w-3 h-3" /> </button>
+                <div className="flex gap-1 items-center">
+                  <button onClick={() => setPreviewMode('2d')} className={`p-1 rounded hover:bg-gray-600 ${previewMode === '2d' ? 'text-white bg-gray-600' : 'text-gray-400'}`} title="2D View"> <Square className="w-3 h-3" /> </button>
+                  <button onClick={() => setPreviewMode('3d')} className={`p-1 rounded hover:bg-gray-600 ${previewMode === '3d' ? 'text-white bg-gray-600' : 'text-gray-400'}`} title="3D View"> <Box className="w-3 h-3" /> </button>
+
+                  {previewMode === '3d' && (
+                    <>
+                      <div className="w-[1px] h-3 bg-gray-600 mx-1" />
+                      <button onClick={() => setPreviewObject('sphere')} className={`p-1 rounded hover:bg-gray-600 ${previewObject === 'sphere' ? 'text-blue-400' : 'text-gray-400'}`} title="Sphere"> <Circle className="w-3 h-3" /> </button>
+                      <button onClick={() => setPreviewObject('cube')} className={`p-1 rounded hover:bg-gray-600 ${previewObject === 'cube' ? 'text-blue-400' : 'text-gray-400'}`} title="Cube"> <Box className="w-3 h-3" /> </button>
+                      <button onClick={() => setPreviewObject('plane')} className={`p-1 rounded hover:bg-gray-600 ${previewObject === 'plane' ? 'text-blue-400' : 'text-gray-400'}`} title="Plane"> <AppWindow className="w-3 h-3" /> </button>
+                    </>
+                  )}
                 </div>
               </div>
               <div className="w-full h-full pt-7 pb-2 px-2 bg-[#000]">
@@ -855,11 +865,17 @@ const App: React.FC = () => {
                   active={activeTab === 'graph'}
                   fragShader={fragShader}
                   vertShader={vertShader}
-                  forcedMesh={previewMode === '2d' ? 'plane' : 'sphere'}
+                  forcedMesh={previewMode === '2d' ? 'plane' : previewObject}
                   textures={textureUniforms}
                   showControls={false}
                   autoRotate={false}
-                  cameraDistance={previewMode === '2d' ? 2.5 : 2.5}
+                  mode={previewMode}
+                  cameraDistance={
+                    previewMode === '2d' ? 2.5 :
+                      previewObject === 'cube' ? 4.5 :
+                        previewObject === 'plane' ? 3.2 :
+                          3.2
+                  }
                 />
               </div>
             </div>
