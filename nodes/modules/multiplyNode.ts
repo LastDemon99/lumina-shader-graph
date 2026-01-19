@@ -6,10 +6,10 @@ export const multiplyNode: NodeModule = {
     type: 'multiply',
     label: 'Multiply',
     inputs: [
-      { id: 'a', label: 'A', type: 'vec4' },
-      { id: 'b', label: 'B', type: 'vec4' },
+      { id: 'a', label: 'A', type: 'float' },
+      { id: 'b', label: 'B', type: 'float' },
     ],
-    outputs: [{ id: 'out', label: 'Out', type: 'vec4' }],
+    outputs: [{ id: 'out', label: 'Out', type: 'vec3' }],
   },
   ui: {
     width: 'normal',
