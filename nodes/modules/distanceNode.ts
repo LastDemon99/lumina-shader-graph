@@ -6,8 +6,8 @@ export const distanceNode: NodeModule = {
     type: 'distance',
     label: 'Distance',
     inputs: [
-      { id: 'a', label: 'A', type: 'vec3' },
-      { id: 'b', label: 'B', type: 'vec3' },
+      { id: 'a', label: 'A', type: 'float' },
+      { id: 'b', label: 'B', type: 'float' },
     ],
     outputs: [{ id: 'out', label: 'Out', type: 'float' }],
   },
@@ -21,9 +21,16 @@ export const distanceNode: NodeModule = {
   },
   glsl: {
     emit: ctx => {
-      const a = ctx.getInput(ctx.id, 'a', 'vec3(0.0)', 'vec3');
-      const b = ctx.getInput(ctx.id, 'b', 'vec3(0.0)', 'vec3');
+      // Determine the highest rank of inputs (e.g., if one is vec3, both are treated as vec3)
+      const type = ctx.getDynamicType(['a', 'b']);
+      const zero = type === 'float' ? '0.0' : `${type}(0.0)`;
+
+      // getInput with '0.0' fallback will automatically be cast to the target 'type'
+      const a = ctx.getInput(ctx.id, 'a', zero, type);
+      const b = ctx.getInput(ctx.id, 'b', zero, type);
       const v = ctx.varName(ctx.id);
+
+      // distance() is built-in for all vector sizes
       ctx.body.push(`float ${v} = distance(${a}, ${b});`);
       ctx.variables[`${ctx.id}_out`] = { name: v, type: 'float' };
       return true;
