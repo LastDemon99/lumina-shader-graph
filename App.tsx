@@ -11,7 +11,7 @@ import { ShaderNode, Connection, Viewport, NodeType, SocketType } from './types'
 import { INITIAL_NODES, INITIAL_CONNECTIONS } from './initialGraph';
 import { NODE_LIST, getNodeModule } from './nodes';
 import { getEffectiveSockets } from './nodes/runtime';
-import { Wand2, Download, Upload, ZoomIn, ZoomOut, MousePointer2, Box, Square, Save, Layers, Network, CheckCircle2, Loader2, Sparkles, FileJson, AlertCircle, Plus } from 'lucide-react';
+import { Wand2, Download, Upload, ZoomIn, ZoomOut, MousePointer2, Box, Square, Save, Layers, Network, CheckCircle2, Loader2, Sparkles, FileJson, AlertCircle, Plus, FilePlus } from 'lucide-react';
 
 const App: React.FC = () => {
   const getDefinitionOrPlaceholder = useCallback((type: string) => {
@@ -24,6 +24,18 @@ const App: React.FC = () => {
       }
     );
   }, []);
+
+  const handleNewGraph = () => {
+    if (confirm('Are you sure you want to create a new graph? Unsaved changes will be lost.')) {
+      setNodes(INITIAL_NODES);
+      setConnections(INITIAL_CONNECTIONS);
+      setViewport({ x: 0, y: 0, zoom: 1 });
+      setSelectedNodeIds(new Set());
+      setFileHandle(null);
+      setFileName(null);
+      setIsSaved(true);
+    }
+  };
 
   // --- Global State ---
   const [activeTab, setActiveTab] = useState<'graph' | 'scene'>('graph');
@@ -389,6 +401,11 @@ const App: React.FC = () => {
         if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA') return;
         e.preventDefault();
         pasteSelection();
+        return;
+      }
+      if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === 'n') {
+        e.preventDefault();
+        handleNewGraph();
         return;
       }
 
@@ -791,6 +808,7 @@ const App: React.FC = () => {
           </div>
         </div>
         <div className="flex items-center gap-2">
+          <button onClick={handleNewGraph} className="bg-gray-800 hover:bg-gray-700 p-1.5 rounded text-gray-300 transition-colors" title="New Graph (Ctrl+Shift+N)"> <FilePlus className="w-4 h-4" /> </button>
           <button onClick={() => saveGraph(false)} className="bg-gray-800 hover:bg-gray-700 p-1.5 rounded text-gray-300 transition-colors" title="Save (Ctrl+S)"> <Save className="w-4 h-4" /> </button>
           <button onClick={() => saveGraph(true)} className="bg-gray-800 hover:bg-gray-700 p-1.5 rounded text-gray-300 transition-colors" title="Save As... (Ctrl+Shift+S)"> <Download className="w-4 h-4" /> </button>
           <button onClick={handleOpen} className="bg-gray-800 hover:bg-gray-700 p-1.5 rounded text-gray-300 cursor-pointer transition-colors" title="Open (Ctrl+O)"> <Upload className="w-4 h-4" /> </button>
