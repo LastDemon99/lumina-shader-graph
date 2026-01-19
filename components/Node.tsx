@@ -46,7 +46,7 @@ const getSocketColor = (type: SocketType) => {
 // Legacy lists kept for backward compatibility until all nodes migrate to metadata/ui config
 const LEGACY_NO_PREVIEW_TYPES = ['float', 'slider', 'time', 'color', 'vector2', 'vector3', 'vector4', 'uv', 'output', 'vertex', 'gradient', 'screen', 'matrixConstruction', 'dielectricSpecular', 'position', 'mainLightDirection', 'object', 'samplerState', 'split', 'textureSize', 'camera', 'sceneDepth', 'sceneDepthDifference', 'flipbook', 'parallaxMapping', 'reciprocal'];
 
-const LEGACY_WIDE_NODE_TYPES = ['color', 'split', 'slider', 'texture2DArrayAsset', 'gradient', 'radialShear'];
+const LEGACY_WIDE_NODE_TYPES = ['color', 'slider', 'texture2DArrayAsset', 'gradient', 'radialShear'];
 
 
 const ThrottledColorInput: React.FC<{ value: string; onChange: (val: string) => void }> = ({ value, onChange }) => {
