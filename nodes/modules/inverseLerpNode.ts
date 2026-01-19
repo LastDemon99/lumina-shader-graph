@@ -22,12 +22,18 @@ export const inverseLerpNode: NodeModule = {
   },
   glsl: {
     emit: ctx => {
-      const a = ctx.getInput(ctx.id, 'a', '0.0', 'float');
-      const b = ctx.getInput(ctx.id, 'b', '1.0', 'float');
-      const t = ctx.getInput(ctx.id, 't', '0.0', 'float');
+      const type = ctx.getDynamicType?.(['a', 'b', 't']) ?? 'float';
+      const zero = type === 'float' ? '0.0' : `${type}(0.0)`;
+      const one = type === 'float' ? '1.0' : `${type}(1.0)`;
+      const epsilon = type === 'float' ? '0.00001' : `${type}(0.00001)`;
+
+      const a = ctx.getInput(ctx.id, 'a', zero, type);
+      const b = ctx.getInput(ctx.id, 'b', one, type);
+      const t = ctx.getInput(ctx.id, 't', zero, type);
+
       const v = ctx.varName(ctx.id);
-      ctx.body.push(`vec3 ${v} = vec3(clamp((${t} - ${a}) / (${b} - ${a} + 0.00001), 0.0, 1.0));`);
-      ctx.variables[`${ctx.id}_out`] = { name: v, type: 'vec3' };
+      ctx.body.push(`${type} ${v} = clamp((${t} - ${a}) / (${b} - ${a} + ${epsilon}), 0.0, 1.0);`);
+      ctx.variables[`${ctx.id}_out`] = { name: v, type };
       return true;
     },
   },
