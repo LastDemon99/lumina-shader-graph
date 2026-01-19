@@ -122,10 +122,7 @@ const App: React.FC = () => {
       }
 
       if (assetUrl) {
-        let uniformName = `u_tex_${n.id.replace(/[-.]/g, '_')}`;
-        if (assetConn) {
-          uniformName = `u_tex_${assetConn.sourceNodeId.replace(/[-.]/g, '_')}`;
-        }
+        const uniformName = `u_tex_${n.id.replace(/[-.]/g, '_')}`;
 
         // Resolve Sampler State
         let wrap = 'Repeat';
@@ -136,14 +133,6 @@ const App: React.FC = () => {
           if (samplerNode) {
             wrap = samplerNode.data.samplerWrap || 'Repeat';
             filter = samplerNode.data.samplerFilter || 'Linear';
-          }
-        }
-
-        // PRIORITY LOGIC:
-        if (map[uniformName]) {
-          const existing = map[uniformName];
-          if (existing.filter === 'Point') {
-            filter = 'Point';
           }
         }
 

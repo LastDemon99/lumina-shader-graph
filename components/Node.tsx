@@ -121,10 +121,7 @@ export const Node: React.FC<NodeProps> = ({
             }
 
             if (assetUrl) {
-                let uniformName = `u_tex_${n.id.replace(/[-.]/g, '_')}`;
-                if (assetConn) {
-                    uniformName = `u_tex_${assetConn.sourceNodeId.replace(/[-.]/g, '_')}`;
-                }
+                const uniformName = `u_tex_${n.id.replace(/[-.]/g, '_')}`;
 
                 let wrap = 'Repeat';
                 // Gather nodes default to Point because Linear interpolation ruins the gather operation logic
@@ -136,14 +133,6 @@ export const Node: React.FC<NodeProps> = ({
                     if (samplerNode) {
                         wrap = samplerNode.data.samplerWrap || 'Repeat';
                         filter = samplerNode.data.samplerFilter || 'Linear';
-                    }
-                }
-
-                // PRIORITY LOGIC:
-                if (map[uniformName]) {
-                    const existing = map[uniformName];
-                    if (existing.filter === 'Point') {
-                        filter = 'Point';
                     }
                 }
 

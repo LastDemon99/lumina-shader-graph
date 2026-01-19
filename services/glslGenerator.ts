@@ -329,15 +329,11 @@ const processGraph = (nodes: ShaderNode[], connections: Connection[], targetNode
     };
 
     const getTextureUniformName = (nodeId: string): string => {
-        const conn = connections.find(c => c.targetNodeId === nodeId && c.targetSocketId === 'texture');
-        const sourceId = conn ? conn.sourceNodeId : nodeId;
-        return `u_tex_${sourceId.replace(/[-.]/g, '_')}`;
+        return `u_tex_${nodeId.replace(/[-.]/g, '_')}`;
     };
 
     const getTextureDimUniformName = (nodeId: string): string => {
-        const conn = connections.find(c => c.targetNodeId === nodeId && c.targetSocketId === 'texture');
-        const sourceId = conn ? conn.sourceNodeId : nodeId;
-        return `u_texDim_${sourceId.replace(/[-.]/g, '_')}`;
+        return `u_texDim_${nodeId.replace(/[-.]/g, '_')}`;
     };
 
     // Helper to determine dynamic type for Math Nodes based on connections

@@ -353,16 +353,19 @@ class PreviewSystem {
         Object.entries(item.textures).forEach(([name, config]) => {
             if (typeof config !== 'object' || !config.url) return;
             const src = config.url;
-            let tex = this.textures.get(src);
+            const cacheKey = `${src}|${config.wrap}|${config.filter}`;
+            let tex = this.textures.get(cacheKey);
             if (!tex) {
                 const t = loadTexture(gl, src, config.wrap, config.filter);
                 if (t) {
-                    this.textures.set(src, t);
+                    this.textures.set(cacheKey, t);
                     tex = t;
                 }
             }
             if (tex) {
                 gl.activeTexture(gl.TEXTURE0 + texUnit);
+                // Even if cached, parameters should be reapplied if the object was modified elsewhere, 
+                // though here each cacheKey is unique to a config, so it's mostly for binding.
                 applyTextureParams(gl, tex, config.wrap, config.filter);
 
                 // Bind the Texture Sampler

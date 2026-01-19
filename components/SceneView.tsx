@@ -61,8 +61,10 @@ export const SceneView: React.FC<SceneViewProps> = ({
         // Check for stale textures
         Object.keys(loadedTexturesRef.current).forEach(key => {
             const texConfig = textures[key];
+            const currentCacheKey = loadedSourcesRef.current[key];
             const isStale = !texConfig;
-            const isChanged = texConfig && loadedSourcesRef.current[key] !== texConfig.url;
+            const targetCacheKey = texConfig ? `${texConfig.url}|${texConfig.wrap}|${texConfig.filter}` : '';
+            const isChanged = texConfig && currentCacheKey !== targetCacheKey;
 
             if (isStale || isChanged) {
                 gl.deleteTexture(loadedTexturesRef.current[key]);
@@ -71,14 +73,14 @@ export const SceneView: React.FC<SceneViewProps> = ({
             }
         });
 
-        // Load new or update params
-        Object.entries(textures).forEach(([uniformName, rawConfig]) => {
-            const config = rawConfig as TextureConfig;
+        // Load new or update
+        Object.entries(textures).forEach(([uniformName, config]) => {
+            const cacheKey = `${config.url}|${config.wrap}|${config.filter}`;
             if (!loadedTexturesRef.current[uniformName]) {
-                const tex = loadTexture(gl, String(config.url), config.wrap, config.filter);
+                const tex = loadTexture(gl, config.url, config.wrap, config.filter);
                 if (tex) {
                     loadedTexturesRef.current[uniformName] = tex;
-                    loadedSourcesRef.current[uniformName] = config.url;
+                    loadedSourcesRef.current[uniformName] = cacheKey;
                 }
             }
         });
