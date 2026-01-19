@@ -430,6 +430,8 @@ const processGraph = (nodes: ShaderNode[], connections: Connection[], targetNode
                 } else if (resultType.startsWith('mat')) {
                     // Extract first component for previewing matrices
                     resultVar = castTo(varDef.name, resultType, 'vec3');
+                } else if (resultType === 'vec2') {
+                    resultVar = `vec3(${varDef.name}, 0.0)`;
                 } else {
                     resultVar = varDef.name; // Already vec3 or color
                 }
@@ -441,7 +443,11 @@ const processGraph = (nodes: ShaderNode[], connections: Connection[], targetNode
             const isColorVar = varDef?.name.includes('rgba') || varDef?.name.includes('rgb') || resultType === 'color';
             const treatVecAsColor = (resultType === 'vec3' || resultType === 'vec4') && !isVectorPreviewNodeType(node.type);
             const isColorPreview = isColorVar || treatVecAsColor;
-            const isVectorPreview = resultType.startsWith('vec') && !isColorPreview;
+
+            // NEW: Only remap vectors if they are vec3/vec4 (potential normals) 
+            // OR if the node explicitly asks for data remapping (like Position node).
+            // This prevents UVs (vec2) from looking washed out.
+            const isVectorPreview = (resultType === 'vec3' || resultType === 'vec4' || isVectorPreviewNodeType(node.type)) && !isColorPreview;
 
             // Debugging aid: enable in DevTools with `window.__LUMINA_DEBUG_PREVIEW = true`
             // Logs how the preview path was chosen (vector remap vs lit color).
