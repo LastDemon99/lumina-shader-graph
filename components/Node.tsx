@@ -172,9 +172,8 @@ export const Node: React.FC<NodeProps> = ({
         ? registryUi.preview.enabled
         : !LEGACY_NO_PREVIEW_TYPES.includes(node.type);
 
-    const isWide = registryUi?.width
-        ? registryUi.width === 'wide'
-        : LEGACY_WIDE_NODE_TYPES.includes(node.type);
+    const isWide = registryUi?.width === 'wide' || LEGACY_WIDE_NODE_TYPES.includes(node.type);
+    const isExtraWide = registryUi?.width === 'extraWide';
 
     // Header Style Setup: Metadata > Specific Legacy (Object) > Default
     const headerColorClass = nodeModule?.metadata?.headerColor
@@ -297,6 +296,14 @@ export const Node: React.FC<NodeProps> = ({
         // Sort for CSS generation
         const sorted = [...stops].sort((a, b) => a.t - b.t);
         return sorted.map(s => `${s.color} ${s.t * 100}%`).join(', ');
+    };
+
+    const isNodeSelected = selected;
+
+    const getNodeWidthClass = () => {
+        if (isExtraWide) return 'w-[480px]';
+        if (isWide) return 'w-60';
+        return 'w-44';
     };
 
     const updateStop = (id: string, updates: Partial<GradientStop>) => {

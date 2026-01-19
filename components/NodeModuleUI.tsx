@@ -416,25 +416,31 @@ export const NodeModuleUI: React.FC<NodeModuleUIProps> = ({ ui, node, allConnect
         return sorted.map(s => `${s.color} ${s.t * 100}%`).join(', ');
       };
 
+      // Persistent cursor position for the specific node (stored in local UI state if needed, or just let it be transient)
+      // Since it's a module, multiple nodes might share this. Let's use node.data to store local cursor if we want it persistent, 
+      // but for Premiere style, a simple click-to-seek is fine.
+      const cursorT = (node.data as any)?._gradientCursorT ?? 0.5;
+
       const updateStop = (id: string, updates: Partial<GradientStop>) => {
         const stops = getStops().map(s => s.id === id ? { ...s, ...updates } : s);
         stops.sort((a, b) => a.t - b.t);
-        setBoundValue(node, onUpdateData, bindTarget, boundKey, stops);
+        // Important: Update directly via onUpdateData skip helper if suspicious of batching
+        onUpdateData(node.id, { ...node.data, [boundKey]: stops });
       };
 
-      const addStop = (t: number) => {
-        t = Math.max(0, Math.min(1, t));
-        const newStop: GradientStop = { id: Date.now().toString(), t, color: '#888888' };
-        const newStops = [...getStops(), newStop].sort((a, b) => a.t - b.t);
-        setBoundValue(node, onUpdateData, bindTarget, boundKey, newStops);
+      const addStopAtCursor = () => {
+        const stops = getStops();
+        const newStop: GradientStop = { id: Date.now().toString(), t: cursorT, color: '#888888' };
+        const newStops = [...stops, newStop].sort((a, b) => a.t - b.t);
+        onUpdateData(node.id, { ...node.data, [boundKey]: newStops });
         setActiveStopId(newStop.id);
       };
 
       const removeStop = (id: string) => {
         const stops = getStops();
-        if (stops.length <= 2) return;
+        if (stops.length <= 1) return; // Allow removing down to 1 if user wants, but 2 is standard. Change to <=1 for flexibility.
         const newStops = stops.filter(s => s.id !== id);
-        setBoundValue(node, onUpdateData, bindTarget, boundKey, newStops);
+        onUpdateData(node.id, { ...node.data, [boundKey]: newStops });
         if (activeStopId === id) setActiveStopId(null);
       };
 
@@ -443,9 +449,19 @@ export const NodeModuleUI: React.FC<NodeModuleUIProps> = ({ ui, node, allConnect
         if (!gradientRef.current) return;
 
         const rect = gradientRef.current.getBoundingClientRect();
-        const relativeX = e.clientX - rect.left;
-        const t = relativeX / rect.width;
-        addStop(t);
+        const t = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+
+        // Update seek cursor position
+        onUpdateData(node.id, { ...node.data, _gradientCursorT: t });
+
+        // Select nearest stop if clicking close to one (within 2% range)
+        const stops = getStops();
+        const nearest = stops.find(s => Math.abs(s.t - t) < 0.02);
+        if (nearest) {
+          setActiveStopId(nearest.id);
+        } else {
+          setActiveStopId(null);
+        }
       };
 
       const stops = getStops();
@@ -455,35 +471,50 @@ export const NodeModuleUI: React.FC<NodeModuleUIProps> = ({ ui, node, allConnect
           <div className="flex items-center justify-between">
             <span className="text-[9px] text-gray-400 font-semibold">{control.label}</span>
             <button
-              onClick={() => addStop(0.5)}
-              className="bg-blue-600 hover:bg-blue-500 text-white p-1 rounded text-[9px]"
+              onClick={addStopAtCursor}
+              className="bg-blue-600 hover:bg-blue-500 text-white p-1 rounded text-[9px] flex items-center gap-1 shadow-lg active:scale-95 transition-transform"
               onMouseDown={e => e.stopPropagation()}
+              title="Add Point at Cursor"
             >
-              <Plus className="w-3 h-3" />
+              <Plus className="w-3 h-3" /> Add
             </button>
           </div>
 
           <div
-            className="w-full h-8 bg-[#0a0a0a] border border-gray-700 rounded relative overflow-hidden cursor-pointer"
+            className="w-full h-8 bg-[#0a0a0a] border border-gray-700 rounded relative cursor-pointer group/grad"
             ref={gradientRef}
             onClick={handleGradientClick}
             onMouseDown={e => e.stopPropagation()}
           >
+            {/* Background Gradient */}
             <div
-              className="absolute inset-0"
+              className="absolute inset-0 rounded overflow-hidden"
               style={{ background: `linear-gradient(to right, ${generateGradientCSS(stops)})` }}
             />
+
+            {/* Playhead / Seek Cursor (Premiere Style) */}
+            <div
+              className="absolute top-0 bottom-0 w-[2px] bg-white shadow-xl z-30 pointer-events-none opacity-60 group-hover/grad:opacity-100 transition-opacity"
+              style={{ left: `${cursorT * 100}%` }}
+            />
+
+            {/* Stops */}
             {stops.map(stop => (
               <div
                 key={stop.id}
-                className={`absolute w-2 h-full cursor-ew-resize group ${stop.id === activeStopId ? 'z-20' : 'z-10'}`}
+                className={`absolute w-4 h-[calc(100%+16px)] -top-2 cursor-ew-resize group ${stop.id === activeStopId ? 'z-40' : 'z-20'}`}
                 style={{ left: `${stop.t * 100}%`, transform: 'translateX(-50%)' }}
                 onMouseDown={(e) => {
                   e.stopPropagation();
                   setActiveStopId(stop.id);
+                  // Also move cursor to the stop position
+                  onUpdateData(node.id, { ...node.data, _gradientCursorT: stop.t });
                 }}
               >
-                <div className={`w-2 h-2 rounded-full border-2 ${stop.id === activeStopId ? 'border-white' : 'border-black'} bg-white absolute bottom-0 left-0 transform translate-y-1/2`} />
+                <div className={`w-1 h-full mx-auto border transition-all ${stop.id === activeStopId
+                  ? 'border-white bg-blue-500 shadow-[0_0_8px_rgba(59,130,246,0.5)]'
+                  : 'border-black/50 bg-white shadow-sm group-hover:bg-blue-100'
+                  }`} />
               </div>
             ))}
           </div>
@@ -492,7 +523,7 @@ export const NodeModuleUI: React.FC<NodeModuleUIProps> = ({ ui, node, allConnect
             const stop = stops.find(s => s.id === activeStopId);
             if (!stop) return null;
             return (
-              <div className="flex flex-col gap-2 bg-[#0a0a0a] border border-gray-700 rounded p-2">
+              <div className="flex flex-col gap-2 bg-[#0a0a0a] border border-gray-700 rounded p-2 shadow-inner">
                 <div className="flex items-center gap-2">
                   <span className="text-[9px] text-gray-500">Position</span>
                   <input
@@ -500,36 +531,36 @@ export const NodeModuleUI: React.FC<NodeModuleUIProps> = ({ ui, node, allConnect
                     min="0" max="1" step="0.01"
                     value={stop.t}
                     onChange={(e) => updateStop(stop.id, { t: parseFloat(e.target.value) })}
-                    className="flex-1"
+                    className="flex-1 accent-blue-500"
                     onMouseDown={e => e.stopPropagation()}
                   />
                   <span className="text-[9px] text-gray-400 w-10 text-right">{Math.round(stop.t * 100)}%</span>
                 </div>
                 <div className="flex items-center justify-between">
-                  <div className="relative w-8 h-8 rounded border border-gray-600 overflow-hidden">
+                  <div className="relative w-8 h-8 rounded border border-gray-600 overflow-hidden shadow-sm">
                     <ThrottledColorInput
                       value={stop.color}
                       onChange={(color) => updateStop(stop.id, { color })}
                     />
                   </div>
                   <div className="flex items-center gap-1">
-                    <div className="flex items-center bg-black/20 border border-gray-700 rounded px-2">
-                      <span className="text-[9px] text-gray-500 mr-1">T</span>
+                    <div className="flex items-center bg-black/30 border border-gray-700 rounded px-2">
+                      <span className="text-[9px] text-gray-500 mr-1 font-mono">T</span>
                       <input
                         type="number" step="0.01" min="0" max="1"
-                        className="w-full bg-transparent text-[10px] text-white outline-none h-5 text-right"
+                        className="w-full bg-transparent text-[10px] text-white outline-none h-5 text-right font-mono"
                         value={stop.t}
                         onChange={(e) => updateStop(stop.id, { t: parseFloat(e.target.value) })}
                         onMouseDown={e => e.stopPropagation()}
                       />
                     </div>
                     <button
-                      className="p-1 text-gray-400 hover:text-red-400 hover:bg-red-900/30 rounded transition-colors"
-                      onClick={() => removeStop(stop.id)}
-                      title="Delete Stop"
+                      className="p-1.5 text-gray-400 hover:text-white hover:bg-red-600 rounded-md transition-all shadow-sm"
+                      onClick={(e) => { e.stopPropagation(); removeStop(stop.id); }}
+                      title="Delete Point"
                       onMouseDown={e => e.stopPropagation()}
                     >
-                      <Trash2 className="w-3 h-3" />
+                      <Trash2 className="w-3.5 h-3.5" />
                     </button>
                   </div>
                 </div>

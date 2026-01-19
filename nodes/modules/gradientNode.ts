@@ -10,7 +10,7 @@ export const gradientNode: NodeModule = {
     outputs: [{ id: 'out', label: 'Out', type: 'gradient' }],
   },
   ui: {
-    width: 'wide',
+    width: 'extraWide',
     sections: [
       {
         id: 'main',
