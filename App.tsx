@@ -55,7 +55,7 @@ const App: React.FC = () => {
   const [hoveredConnectionId, setHoveredConnectionId] = useState<string | null>(null);
 
   // Preview State (Mini preview in Graph)
-  const [previewMode, setPreviewMode] = useState<'2d' | '3d'>('3d');
+  const [previewMode, setPreviewMode] = useState<'2d' | '3d'>('2d');
   const [previewObject, setPreviewObject] = useState<'sphere' | 'cube' | 'plane'>('sphere');
 
   // Interaction State

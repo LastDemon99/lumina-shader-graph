@@ -94,7 +94,7 @@ export const Node: React.FC<NodeProps> = ({
     const arrayFileInputRef = useRef<HTMLInputElement>(null);
     const gradientRef = useRef<HTMLDivElement>(null);
 
-    const previewMode = node.data.previewMode || '3d';
+    const previewMode = node.data.previewMode || '2d';
     const isPreviewCollapsed = node.data.previewCollapsed || false;
     const isNodeCollapsed = node.data.nodeCollapsed || false;
 
