@@ -43,6 +43,9 @@ const COMMON_HEADER = `
   
   #define PI 3.14159265359
   #define TAU 6.28318530718
+  #define PHI 1.61803398875
+  #define E 2.71828182846
+  #define SQRT2 1.41421356237
 
   // Transpose Polyfill
   mat3 transpose(mat3 m) {
