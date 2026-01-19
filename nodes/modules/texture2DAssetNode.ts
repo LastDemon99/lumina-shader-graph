@@ -1,10 +1,10 @@
 import type { NodeModule } from '../types';
 
-export const textureAssetNode: NodeModule = {
-  type: 'textureAsset',
+export const texture2DAssetNode: NodeModule = {
+  type: 'texture2DAsset',
   definition: {
-    type: 'textureAsset',
-    label: 'Texture Asset',
+    type: 'texture2DAsset',
+    label: 'Texture 2D Asset',
     inputs: [],
     outputs: [{ id: 'out', label: 'Out', type: 'texture' }],
   },
