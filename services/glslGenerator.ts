@@ -47,12 +47,23 @@ const COMMON_HEADER = `
   #define E 2.71828182846
   #define SQRT2 1.41421356237
 
-  // Transpose Polyfill
+  // Transpose Polyfills
+  mat2 transpose(mat2 m) {
+    return mat2(m[0].x, m[1].x, m[0].y, m[1].y);
+  }
   mat3 transpose(mat3 m) {
     return mat3(
       m[0].x, m[1].x, m[2].x,
       m[0].y, m[1].y, m[2].y,
       m[0].z, m[1].z, m[2].z
+    );
+  }
+  mat4 transpose(mat4 m) {
+    return mat4(
+      m[0].x, m[1].x, m[2].x, m[3].x,
+      m[0].y, m[1].y, m[2].y, m[3].y,
+      m[0].z, m[1].z, m[2].z, m[3].z,
+      m[0].w, m[1].w, m[2].w, m[3].w
     );
   }
   
