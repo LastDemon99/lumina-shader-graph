@@ -1,5 +1,7 @@
 import type { NodeModule } from '../types';
 
+type RangeMode = 'Degrees' | 'Normalized';
+
 const COLOR_FUNCTIONS_VERTEX_ONLY = `
 vec3 rgb2hsv(vec3 c) {
     vec4 K = vec4(0.0, -1.0 / 3.0, 2.0 / 3.0, -1.0);
@@ -29,10 +31,32 @@ export const hueNode: NodeModule = {
     ],
     outputs: [{ id: 'out', label: 'Out', type: 'vec3' }],
   },
+  initialData: () => ({
+    range: 'Degrees',
+  }),
   ui: {
     width: 'normal',
     preview: { enabled: true },
-    sections: [],
+    sections: [
+      {
+        id: 'settings',
+        title: 'Settings',
+        controls: [
+          {
+            id: 'range',
+            label: 'Range',
+            controlType: 'select',
+            bind: { scope: 'data', key: 'range' },
+            select: {
+              options: [
+                { label: 'Degrees', value: 'Degrees' },
+                { label: 'Normalized', value: 'Normalized' },
+              ],
+            },
+          },
+        ],
+      },
+    ],
   },
   socketRules: {
     fallbackSocket: { input: 'in', output: 'out' },
@@ -45,12 +69,18 @@ export const hueNode: NodeModule = {
         ctx.functions.add(COLOR_FUNCTIONS_VERTEX_ONLY);
       }
 
+      const range = (ctx.node.data.range as RangeMode) || 'Degrees';
       const i = ctx.getInput(ctx.id, 'in', 'vec3(0.0)', 'vec3');
       const offset = ctx.getInput(ctx.id, 'offset', '0.0', 'float');
       const v = ctx.varName(ctx.id);
 
+      let adjustedOffset = offset;
+      if (range === 'Degrees') {
+        adjustedOffset = `(${offset} / 360.0)`;
+      }
+
       ctx.body.push(`vec3 ${v}_hsv = rgb2hsv(${i});`);
-      ctx.body.push(`${v}_hsv.x = fract(${v}_hsv.x + ${offset});`);
+      ctx.body.push(`${v}_hsv.x = fract(${v}_hsv.x + ${adjustedOffset});`);
       ctx.body.push(`vec3 ${v} = hsv2rgb(${v}_hsv);`);
       ctx.variables[`${ctx.id}_out`] = { name: v, type: 'vec3' };
       return true;
