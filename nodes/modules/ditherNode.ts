@@ -2,39 +2,16 @@ import type { NodeModule } from '../types';
 
 const BAYER4_FUNCTION = `
 float bayer4(vec2 p) {
-    vec2 f = mod(p, 4.0);
-    float x = f.x;
-    float y = f.y;
-
-    // 4x4 Bayer matrix thresholds in [0,1)
-    // Row0:  0  8  2 10
-    // Row1: 12  4 14  6
-    // Row2:  3 11  1  9
-    // Row3: 15  7 13  5
-    if (y < 1.0) {
-        if (x < 1.0) return 0.0 / 16.0;
-        if (x < 2.0) return 8.0 / 16.0;
-        if (x < 3.0) return 2.0 / 16.0;
-        return 10.0 / 16.0;
-    }
-    if (y < 2.0) {
-        if (x < 1.0) return 12.0 / 16.0;
-        if (x < 2.0) return 4.0 / 16.0;
-        if (x < 3.0) return 14.0 / 16.0;
-        return 6.0 / 16.0;
-    }
-    if (y < 3.0) {
-        if (x < 1.0) return 3.0 / 16.0;
-        if (x < 2.0) return 11.0 / 16.0;
-        if (x < 3.0) return 1.0 / 16.0;
-        return 9.0 / 16.0;
-    }
-    {
-        if (x < 1.0) return 15.0 / 16.0;
-        if (x < 2.0) return 7.0 / 16.0;
-        if (x < 3.0) return 13.0 / 16.0;
-        return 5.0 / 16.0;
-    }
+    vec2 f = mod(floor(p), 4.0);
+    int x = int(f.x);
+    int y = int(f.y);
+    int index = y * 4 + x;
+    
+    if (index == 0) return 0.0; if (index == 1) return 0.5; if (index == 2) return 0.125; if (index == 3) return 0.625;
+    if (index == 4) return 0.75; if (index == 5) return 0.25; if (index == 6) return 0.875; if (index == 7) return 0.375;
+    if (index == 8) return 0.1875; if (index == 9) return 0.6875; if (index == 10) return 0.0625; if (index == 11) return 0.5625;
+    if (index == 12) return 0.9375; if (index == 13) return 0.4375; if (index == 14) return 0.8125; if (index == 15) return 0.3125;
+    return 0.0;
 }
 `;
 
@@ -44,10 +21,10 @@ export const ditherNode: NodeModule = {
     type: 'dither',
     label: 'Dither',
     inputs: [
-      { id: 'in', label: 'In', type: 'float' },
-      { id: 'screenPos', label: 'Screen Pos(4)', type: 'vec4' },
+      { id: 'in', label: 'In(1)', type: 'float' },
+      { id: 'screenPos', label: 'Screen Position(4)', type: 'vec4' },
     ],
-    outputs: [{ id: 'out', label: 'Out', type: 'float' }],
+    outputs: [{ id: 'out', label: 'Out(1)', type: 'float' }],
   },
   ui: {
     width: 'normal',
@@ -63,7 +40,6 @@ export const ditherNode: NodeModule = {
       const v = ctx.varName(ctx.id);
 
       if (ctx.mode === 'vertex') {
-        // Screen position isn't available in vertex mode.
         ctx.body.push(`float ${v} = ${i};`);
         ctx.variables[`${ctx.id}_out`] = { name: v, type: 'float' };
         return true;
@@ -71,10 +47,17 @@ export const ditherNode: NodeModule = {
 
       ctx.functions.add(BAYER4_FUNCTION);
 
-      const sp = ctx.getInput(ctx.id, 'screenPos', 'vec4(0.0)', 'vec4');
-      // Use pixel-space-ish coords; if normalized coords are provided, pattern still repeats.
-      ctx.body.push(`float ${v}_t = bayer4(floor(${sp}.xy));`);
-      ctx.body.push(`float ${v} = step(${v}_t, ${i});`);
+      // Default to normalized screen coordinates if not connected
+      // (gl_FragCoord.xy - u_viewPort.xy) / u_viewPort.zw
+      const defaultScreenPos = `vec4((gl_FragCoord.xy - u_viewPort.xy) / u_viewPort.zw, 0.0, 1.0)`;
+      const sp = ctx.getInput(ctx.id, 'screenPos', defaultScreenPos, 'vec4');
+
+      // The bayer4 function expects pixel coordinates.
+      // Since sp is normalized (0-1) from typical ScreenPosition nodes, we multiply by viewport size.
+      ctx.body.push(`vec2 ${v}_pixel = ${sp}.xy * u_viewPort.zw;`);
+      ctx.body.push(`float ${v}_dither = bayer4(${v}_pixel);`);
+      ctx.body.push(`float ${v} = step(${v}_dither, ${i});`);
+
       ctx.variables[`${ctx.id}_out`] = { name: v, type: 'float' };
       return true;
     },
