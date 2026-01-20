@@ -18,7 +18,8 @@ export const reflectionNode: NodeModule = {
     },
     glsl: {
         emit: ctx => {
-            const type = ctx.getDynamicType(['in', 'normal']);
+            let type = ctx.getDynamicType(['in', 'normal']);
+            if (type === 'vec4') type = 'vec3';
 
             // In: View Direction (normalize(vPosition - u_cameraPosition))
             // Normal: World Normal (vNormal)

@@ -22,7 +22,8 @@ export const distanceNode: NodeModule = {
   glsl: {
     emit: ctx => {
       // Determine the highest rank of inputs (e.g., if one is vec3, both are treated as vec3)
-      const type = ctx.getDynamicType(['a', 'b']);
+      let type = ctx.getDynamicType(['a', 'b']);
+      if (type === 'vec4') type = 'vec3';
       const zero = type === 'float' ? '0.0' : `${type}(0.0)`;
 
       // getInput with '0.0' fallback will automatically be cast to the target 'type'

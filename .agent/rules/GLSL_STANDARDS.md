@@ -166,3 +166,21 @@ Nodes like `Add`, `Subtract`, `Multiply` adapt automatically to the highest rank
     1. Analyze connected input types.
     2. Determine Rank: `vec4` > `vec3` > `vec2` > `float`.
     3. Cast all operands to the resulting type before operating.
+## 12. Spatial Magnitude and Vec4 Interference
+
+### The Problem
+In Lumina, many vector sources (like UVs) are emitted as `vec4` (where W is often 1.0 or 0.5). If a node performs a spatial calculation (like `distance`, `length`, `reflect`, or `dot`) using a `vec4` directly, the **W component** will interfere with the result, often leading to incorrect magnitudes or "always black" previews.
+
+### The Rule
+For any node performing geometric or spatial calculations based on distance or dot products, you **MUST** cap the calculation dimension to `vec3` (or `vec2`) to ignore the W component interference.
+
+**Correct implementation pattern in `emit`:**
+```typescript
+let type = ctx.getDynamicType(['a', 'b']);
+// Cap at vec3 to ignore phantom W-component in magnitude calculations
+if (type === 'vec4') type = 'vec3'; 
+
+const a = ctx.getInput(ctx.id, 'a', 'vec3(0.0)', type);
+const b = ctx.getInput(ctx.id, 'b', 'vec3(0.0)', type);
+ctx.body.push(`float res = distance(${a}, ${b});`);
+```
