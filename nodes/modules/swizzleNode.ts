@@ -26,9 +26,9 @@ export const swizzleNode: NodeModule = {
           {
             id: 'mask',
             label: 'Mask',
-            controlType: 'multiSelectMask',
+            controlType: 'orderedToggle',
             bind: { scope: 'data', key: 'mask' },
-            multiSelectMask: {
+            orderedToggle: {
               options: MASK_OPTIONS,
               allowDuplicates: true,
               minLength: 1,

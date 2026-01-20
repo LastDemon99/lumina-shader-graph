@@ -41,7 +41,7 @@ export type ControlType =
   | 'toggle'
   | 'select'
   | 'color'
-  | 'multiSelectMask'
+  | 'orderedToggle'
   | 'range'
   | 'gradient'
   | 'texture'
@@ -69,7 +69,7 @@ export interface ControlSpec {
   select?: {
     options: Array<{ label: string; value: string }>;
   };
-  multiSelectMask?: {
+  orderedToggle?: {
     // e.g. xyzw or rgba
     options: Array<{ label: string; value: string }>;
     allowDuplicates?: boolean;

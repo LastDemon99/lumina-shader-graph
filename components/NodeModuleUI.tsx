@@ -192,10 +192,10 @@ export const NodeModuleUI: React.FC<NodeModuleUIProps> = ({ ui, node, allConnect
       );
     }
 
-    if (control.controlType === 'multiSelectMask') {
-      const mask = String(value ?? control.multiSelectMask?.defaultValue ?? '');
+    if (control.controlType === 'orderedToggle') {
+      const mask = String(value ?? control.orderedToggle?.defaultValue ?? '');
       const isOpen = maskOpenId === control.id;
-      const options = control.multiSelectMask?.options ?? [];
+      const options = control.orderedToggle?.options ?? [];
 
       return (
         <div className="relative w-full nodrag dropdown-container" data-node-id={node.id}>
@@ -234,7 +234,7 @@ export const NodeModuleUI: React.FC<NodeModuleUIProps> = ({ ui, node, allConnect
                       onClick={(e) => {
                         e.stopPropagation();
                         let newMask = isActive ? current.replaceAll(opt.value, '') : current + opt.value;
-                        const allowDuplicates = control.multiSelectMask?.allowDuplicates ?? false;
+                        const allowDuplicates = control.orderedToggle?.allowDuplicates ?? false;
                         if (!allowDuplicates) {
                           const order = options.map(o => o.value);
                           newMask = order.filter(c => newMask.includes(c)).join('');

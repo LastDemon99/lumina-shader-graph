@@ -155,6 +155,22 @@ Vectors often break visually. Follow this structure strictly:
 
 ---
 
+## 8. UI Control Selection Criteria (UX Guidelines)
+
+When defining node properties in `initialData` and `ui.sections`, choose the control type based on the mathematical intent:
+
+### 8.1. Use `toggle` (Independent Flags)
+Use multiple `toggle` controls when the order of selection **DOES NOT** affect the final result.
+- **Examples:** `Channel Mask`, `Invert Colors`, `Flip`.
+- **Reasoning:** Independent boolean flags are clearer for unordered masks. The user should be able to toggle "Red" or "Alpha" without caring which one was clicked first.
+
+### 8.2. Use `orderedToggle` (Ordered Sequence)
+Use a single control that captures a sequence when the order **IS CRITICAL** for the operation.
+- **Example:** `Swizzle`.
+- **Reasoning:** In a Swizzle operation, the string `wzyx` produces a different vector than `xyzw`. The control must capture and display the precise sequence chosen by the user.
+
+---
+
 ## 6. Prevention of Common Errors
 
 1. **File Truncation:** When generating code with AI, always ensure the `Node.tsx` file is generated completely.

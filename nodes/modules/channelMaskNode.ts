@@ -5,37 +5,46 @@ export const channelMaskNode: NodeModule = {
   definition: {
     type: 'channelMask',
     label: 'Channel Mask',
-    inputs: [{ id: 'in', label: 'In', type: 'vec4' }],
-    outputs: [{ id: 'out', label: 'Out', type: 'vec4' }],
+    inputs: [{ id: 'in', label: 'In(1)', type: 'float' }],
+    outputs: [{ id: 'out', label: 'Out(1)', type: 'float' }],
   },
   initialData: () => ({
-    channelMask: 'RGBA',
+    maskRed: true,
+    maskGreen: true,
+    maskBlue: true,
+    maskAlpha: true,
   }),
   ui: {
     width: 'normal',
     preview: { enabled: true },
     sections: [
       {
-        id: 'mask',
-        title: 'Mask',
+        id: 'channels',
+        title: 'Channels',
         controls: [
           {
-            id: 'channelMask',
-            label: 'Channels',
-            controlType: 'multiSelectMask',
-            bind: { scope: 'data', key: 'channelMask' },
-            multiSelectMask: {
-              options: [
-                { label: 'R', value: 'R' },
-                { label: 'G', value: 'G' },
-                { label: 'B', value: 'B' },
-                { label: 'A', value: 'A' },
-              ],
-              allowDuplicates: false,
-              minLength: 0,
-              maxLength: 4,
-              defaultValue: 'RGBA',
-            },
+            id: 'maskRed',
+            label: 'Red',
+            controlType: 'toggle',
+            bind: { scope: 'data', key: 'maskRed' },
+          },
+          {
+            id: 'maskGreen',
+            label: 'Green',
+            controlType: 'toggle',
+            bind: { scope: 'data', key: 'maskGreen' },
+          },
+          {
+            id: 'maskBlue',
+            label: 'Blue',
+            controlType: 'toggle',
+            bind: { scope: 'data', key: 'maskBlue' },
+          },
+          {
+            id: 'maskAlpha',
+            label: 'Alpha',
+            controlType: 'toggle',
+            bind: { scope: 'data', key: 'maskAlpha' },
           },
         ],
       },
@@ -46,15 +55,26 @@ export const channelMaskNode: NodeModule = {
   },
   glsl: {
     emit: ctx => {
-      const i = ctx.getInput(ctx.id, 'in', 'vec4(0.0)', 'vec4');
-      const mask = (ctx.node.data.channelMask as string | undefined) || 'RGBA';
+      const type = ctx.getDynamicType(['in']);
+      const i = ctx.getInput(ctx.id, 'in', type === 'float' ? '0.0' : `${type}(0.0)`, type);
       const v = ctx.varName(ctx.id);
-      const r = mask.includes('R') ? '1.0' : '0.0';
-      const g = mask.includes('G') ? '1.0' : '0.0';
-      const b = mask.includes('B') ? '1.0' : '0.0';
-      const a = mask.includes('A') ? '1.0' : '0.0';
-      ctx.body.push(`vec4 ${v} = ${i} * vec4(${r}, ${g}, ${b}, ${a});`);
-      ctx.variables[`${ctx.id}_out`] = { name: v, type: 'vec4' };
+
+      const r = ctx.node.data.maskRed ? '1.0' : '0.0';
+      const g = ctx.node.data.maskGreen ? '1.0' : '0.0';
+      const b = ctx.node.data.maskBlue ? '1.0' : '0.0';
+      const a = ctx.node.data.maskAlpha ? '1.0' : '0.0';
+
+      if (type === 'float') {
+        ctx.body.push(`float ${v} = ${i} * ${r};`);
+      } else if (type === 'vec2') {
+        ctx.body.push(`vec2 ${v} = ${i} * vec2(${r}, ${g});`);
+      } else if (type === 'vec3') {
+        ctx.body.push(`vec3 ${v} = ${i} * vec3(${r}, ${g}, ${b});`);
+      } else if (type === 'vec4') {
+        ctx.body.push(`vec4 ${v} = ${i} * vec4(${r}, ${g}, ${b}, ${a});`);
+      }
+
+      ctx.variables[`${ctx.id}_out`] = { name: v, type };
       return true;
     },
   },
