@@ -136,6 +136,9 @@ const UNIFORMS = `
   uniform mat4 u_projection;
   uniform mat4 u_model_inv;
   uniform mat4 u_view_inv;
+  uniform mat4 u_projection_inv;
+  uniform mat4 u_viewProjection;
+  uniform mat4 u_viewProjection_inv;
   uniform int u_previewMode; // 0 = 2D (Unlit), 1 = 3D (Lit)
 `;
 

@@ -48,8 +48,8 @@ export const mat4 = {
     let a00 = a[0], a01 = a[1], a02 = a[2], a03 = a[3];
     let a20 = a[8], a21 = a[9], a22 = a[10], a23 = a[11];
 
-    if (a !== out) { 
-        out.set(a);
+    if (a !== out) {
+      out.set(a);
     }
 
     out[0] = a00 * c - a20 * s;
@@ -62,23 +62,23 @@ export const mat4 = {
     out[11] = a03 * s + a23 * c;
   },
   rotateX: (out: Float32Array, a: Float32Array, rad: number) => {
-      let s = Math.sin(rad);
-      let c = Math.cos(rad);
-      let a10 = a[4], a11 = a[5], a12 = a[6], a13 = a[7];
-      let a20 = a[8], a21 = a[9], a22 = a[10], a23 = a[11];
-  
-      if (a !== out) { 
-          out.set(a);
-      }
-  
-      out[4] = a10 * c + a20 * s;
-      out[5] = a11 * c + a21 * s;
-      out[6] = a12 * c + a22 * s;
-      out[7] = a13 * c + a23 * s;
-      out[8] = a20 * c - a10 * s;
-      out[9] = a21 * c - a11 * s;
-      out[10] = a22 * c - a12 * s;
-      out[11] = a23 * c - a13 * s;
+    let s = Math.sin(rad);
+    let c = Math.cos(rad);
+    let a10 = a[4], a11 = a[5], a12 = a[6], a13 = a[7];
+    let a20 = a[8], a21 = a[9], a22 = a[10], a23 = a[11];
+
+    if (a !== out) {
+      out.set(a);
+    }
+
+    out[4] = a10 * c + a20 * s;
+    out[5] = a11 * c + a21 * s;
+    out[6] = a12 * c + a22 * s;
+    out[7] = a13 * c + a23 * s;
+    out[8] = a20 * c - a10 * s;
+    out[9] = a21 * c - a11 * s;
+    out[10] = a22 * c - a12 * s;
+    out[11] = a23 * c - a13 * s;
   },
   invert: (out: Float32Array, a: Float32Array) => {
     const a00 = a[0], a01 = a[1], a02 = a[2], a03 = a[3];
@@ -101,8 +101,8 @@ export const mat4 = {
 
     let det = b00 * b11 - b01 * b10 + b02 * b09 + b03 * b08 - b04 * b07 + b05 * b06;
 
-    if (!det) { 
-        return null; 
+    if (!det) {
+      return null;
     }
     det = 1.0 / det;
 
@@ -122,17 +122,47 @@ export const mat4 = {
     out[13] = (a00 * b09 - a01 * b07 + a02 * b06) * det;
     out[14] = (a31 * b01 - a30 * b03 - a32 * b00) * det;
     out[15] = (a20 * b03 - a21 * b01 + a22 * b00) * det;
+  },
+  multiply: (out: Float32Array, a: Float32Array, b: Float32Array) => {
+    const a00 = a[0], a01 = a[1], a02 = a[2], a03 = a[3];
+    const a10 = a[4], a11 = a[5], a12 = a[6], a13 = a[7];
+    const a20 = a[8], a21 = a[9], a22 = a[10], a23 = a[11];
+    const a30 = a[12], a31 = a[13], a32 = a[14], a33 = a[15];
+
+    let b0 = b[0], b1 = b[1], b2 = b[2], b3 = b[3];
+    out[0] = b0 * a00 + b1 * a10 + b2 * a20 + b3 * a30;
+    out[1] = b0 * a01 + b1 * a11 + b2 * a21 + b3 * a31;
+    out[2] = b0 * a02 + b1 * a12 + b2 * a22 + b3 * a32;
+    out[3] = b0 * a03 + b1 * a13 + b2 * a23 + b3 * a33;
+
+    b0 = b[4]; b1 = b[5]; b2 = b[6]; b3 = b[7];
+    out[4] = b0 * a00 + b1 * a10 + b2 * a20 + b3 * a30;
+    out[5] = b0 * a01 + b1 * a11 + b2 * a21 + b3 * a31;
+    out[6] = b0 * a02 + b1 * a12 + b2 * a22 + b3 * a32;
+    out[7] = b0 * a03 + b1 * a13 + b2 * a23 + b3 * a33;
+
+    b0 = b[8]; b1 = b[9]; b2 = b[10]; b3 = b[11];
+    out[8] = b0 * a00 + b1 * a10 + b2 * a20 + b3 * a30;
+    out[9] = b0 * a01 + b1 * a11 + b2 * a21 + b3 * a31;
+    out[10] = b0 * a02 + b1 * a12 + b2 * a22 + b3 * a32;
+    out[11] = b0 * a03 + b1 * a13 + b2 * a23 + b3 * a33;
+
+    b0 = b[12]; b1 = b[13]; b2 = b[14]; b3 = b[15];
+    out[12] = b0 * a00 + b1 * a10 + b2 * a20 + b3 * a30;
+    out[13] = b0 * a01 + b1 * a11 + b2 * a21 + b3 * a31;
+    out[14] = b0 * a02 + b1 * a12 + b2 * a22 + b3 * a32;
+    out[15] = b0 * a03 + b1 * a13 + b2 * a23 + b3 * a33;
   }
 };
 
 export const createQuad = () => {
   return {
-    vertices: new Float32Array([ -1, -1, 0, 1, -1, 0, -1, 1, 0, 1, 1, 0 ]),
+    vertices: new Float32Array([-1, -1, 0, 1, -1, 0, -1, 1, 0, 1, 1, 0]),
     indices: new Uint16Array([0, 1, 2, 2, 1, 3]), // CCW
-    uvs: new Float32Array([ 0, 0, 1, 0, 0, 1, 1, 1 ]),
-    normals: new Float32Array([ 0,0,1, 0,0,1, 0,0,1, 0,0,1 ]),
-    tangents: new Float32Array([ 1,0,0,1, 1,0,0,1, 1,0,0,1, 1,0,0,1 ]),
-    colors: new Float32Array([ 1,1,1,1, 1,1,1,1, 1,1,1,1, 1,1,1,1 ]) // White
+    uvs: new Float32Array([0, 0, 1, 0, 0, 1, 1, 1]),
+    normals: new Float32Array([0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1]),
+    tangents: new Float32Array([1, 0, 0, 1, 1, 0, 0, 1, 1, 0, 0, 1, 1, 0, 0, 1]),
+    colors: new Float32Array([1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]) // White
   };
 };
 
@@ -150,20 +180,20 @@ export const createSphere = (radius: number, widthSegments: number, heightSegmen
     for (let x = 0; x <= widthSegments; x++) {
       const u = x / widthSegments;
       const phi = u * Math.PI * 2;
-      
+
       const px = radius * Math.sin(theta) * Math.cos(phi);
       const py = radius * Math.cos(theta);
       const pz = radius * Math.sin(theta) * Math.sin(phi);
-      
+
       positions.push(px, py, pz);
-      normals.push(px/radius, py/radius, pz/radius);
-      uvs.push(1-u, 1-v); 
+      normals.push(px / radius, py / radius, pz / radius);
+      uvs.push(1 - u, 1 - v);
 
       const tx = -Math.sin(phi);
       const ty = 0;
       const tz = Math.cos(phi);
       tangents.push(tx, ty, tz, 1.0);
-      
+
       colors.push(1.0, 1.0, 1.0, 1.0); // Default White
     }
   }
@@ -189,77 +219,77 @@ export const createSphere = (radius: number, widthSegments: number, heightSegmen
 };
 
 export const createCube = () => {
-    const vertices = [
-        // Front
-        -1, -1,  1,   1, -1,  1,   1,  1,  1,  -1,  1,  1,
-        // Back
-        -1, -1, -1,  -1,  1, -1,   1,  1, -1,   1, -1, -1,
-        // Top
-        -1,  1, -1,  -1,  1,  1,   1,  1,  1,   1,  1, -1,
-        // Bottom
-        -1, -1, -1,   1, -1, -1,   1, -1,  1,  -1, -1,  1,
-        // Right
-         1, -1, -1,   1,  1, -1,   1,  1,  1,   1, -1,  1,
-        // Left
-        -1, -1, -1,  -1, -1,  1,  -1,  1,  1,  -1,  1, -1,
-    ];
-    
-    const uvs = [
-        0,0, 1,0, 1,1, 0,1, // Front
-        1,0, 1,1, 0,1, 0,0, // Back
-        0,1, 0,0, 1,0, 1,1, // Top
-        1,1, 0,1, 0,0, 1,0, // Bottom
-        1,0, 1,1, 0,1, 0,0, // Right
-        0,0, 1,0, 1,1, 0,1, // Left
-    ];
-    
-    const normals = [
-        0,0,1, 0,0,1, 0,0,1, 0,0,1,
-        0,0,-1, 0,0,-1, 0,0,-1, 0,0,-1,
-        0,1,0, 0,1,0, 0,1,0, 0,1,0,
-        0,-1,0, 0,-1,0, 0,-1,0, 0,-1,0,
-        1,0,0, 1,0,0, 1,0,0, 1,0,0,
-        -1,0,0, -1,0,0, -1,0,0, -1,0,0
-    ];
+  const vertices = [
+    // Front
+    -1, -1, 1, 1, -1, 1, 1, 1, 1, -1, 1, 1,
+    // Back
+    -1, -1, -1, -1, 1, -1, 1, 1, -1, 1, -1, -1,
+    // Top
+    -1, 1, -1, -1, 1, 1, 1, 1, 1, 1, 1, -1,
+    // Bottom
+    -1, -1, -1, 1, -1, -1, 1, -1, 1, -1, -1, 1,
+    // Right
+    1, -1, -1, 1, 1, -1, 1, 1, 1, 1, -1, 1,
+    // Left
+    -1, -1, -1, -1, -1, 1, -1, 1, 1, -1, 1, -1,
+  ];
 
-    const tangents = [
-        1,0,0,1, 1,0,0,1, 1,0,0,1, 1,0,0,1,
-        -1,0,0,1, -1,0,0,1, -1,0,0,1, -1,0,0,1, 
-        1,0,0,1, 1,0,0,1, 1,0,0,1, 1,0,0,1,
-        1,0,0,1, 1,0,0,1, 1,0,0,1, 1,0,0,1,
-        0,0,-1,1, 0,0,-1,1, 0,0,-1,1, 0,0,-1,1,
-        0,0,1,1, 0,0,1,1, 0,0,1,1, 0,0,1,1
-    ];
+  const uvs = [
+    0, 0, 1, 0, 1, 1, 0, 1, // Front
+    1, 0, 1, 1, 0, 1, 0, 0, // Back
+    0, 1, 0, 0, 1, 0, 1, 1, // Top
+    1, 1, 0, 1, 0, 0, 1, 0, // Bottom
+    1, 0, 1, 1, 0, 1, 0, 0, // Right
+    0, 0, 1, 0, 1, 1, 0, 1, // Left
+  ];
 
-    const indices = [
-        0, 1, 2, 0, 2, 3,    // Front
-        4, 5, 6, 4, 6, 7,    // Back
-        8, 9, 10, 8, 10, 11, // Top
-        12, 13, 14, 12, 14, 15, // Bottom
-        16, 17, 18, 16, 18, 19, // Right
-        20, 21, 22, 20, 22, 23  // Left
-    ];
+  const normals = [
+    0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1,
+    0, 0, -1, 0, 0, -1, 0, 0, -1, 0, 0, -1,
+    0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0,
+    0, -1, 0, 0, -1, 0, 0, -1, 0, 0, -1, 0,
+    1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0,
+    -1, 0, 0, -1, 0, 0, -1, 0, 0, -1, 0, 0
+  ];
 
-    // 24 vertices * 4 floats
-    const colors = new Float32Array(24 * 4).fill(1.0); 
+  const tangents = [
+    1, 0, 0, 1, 1, 0, 0, 1, 1, 0, 0, 1, 1, 0, 0, 1,
+    -1, 0, 0, 1, -1, 0, 0, 1, -1, 0, 0, 1, -1, 0, 0, 1,
+    1, 0, 0, 1, 1, 0, 0, 1, 1, 0, 0, 1, 1, 0, 0, 1,
+    1, 0, 0, 1, 1, 0, 0, 1, 1, 0, 0, 1, 1, 0, 0, 1,
+    0, 0, -1, 1, 0, 0, -1, 1, 0, 0, -1, 1, 0, 0, -1, 1,
+    0, 0, 1, 1, 0, 0, 1, 1, 0, 0, 1, 1, 0, 0, 1, 1
+  ];
 
-    return {
-        vertices: new Float32Array(vertices),
-        uvs: new Float32Array(uvs),
-        normals: new Float32Array(normals),
-        tangents: new Float32Array(tangents),
-        colors: colors,
-        indices: new Uint16Array(indices)
-    };
+  const indices = [
+    0, 1, 2, 0, 2, 3,    // Front
+    4, 5, 6, 4, 6, 7,    // Back
+    8, 9, 10, 8, 10, 11, // Top
+    12, 13, 14, 12, 14, 15, // Bottom
+    16, 17, 18, 16, 18, 19, // Right
+    20, 21, 22, 20, 22, 23  // Left
+  ];
+
+  // 24 vertices * 4 floats
+  const colors = new Float32Array(24 * 4).fill(1.0);
+
+  return {
+    vertices: new Float32Array(vertices),
+    uvs: new Float32Array(uvs),
+    normals: new Float32Array(normals),
+    tangents: new Float32Array(tangents),
+    colors: colors,
+    indices: new Uint16Array(indices)
+  };
 };
 
 export const createPlane = () => {
-    return {
-        vertices: new Float32Array([-1, -1, 0,  1, -1, 0,  1, 1, 0,  -1, 1, 0]),
-        uvs: new Float32Array([0, 0, 1, 0, 1, 1, 0, 1]),
-        normals: new Float32Array([0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1]),
-        tangents: new Float32Array([1, 0, 0, 1,  1, 0, 0, 1,  1, 0, 0, 1,  1, 0, 0, 1]),
-        colors: new Float32Array(4 * 4).fill(1.0),
-        indices: new Uint16Array([0, 1, 2, 0, 2, 3])
-    };
+  return {
+    vertices: new Float32Array([-1, -1, 0, 1, -1, 0, 1, 1, 0, -1, 1, 0]),
+    uvs: new Float32Array([0, 0, 1, 0, 1, 1, 0, 1]),
+    normals: new Float32Array([0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1]),
+    tangents: new Float32Array([1, 0, 0, 1, 1, 0, 0, 1, 1, 0, 0, 1, 1, 0, 0, 1]),
+    colors: new Float32Array(4 * 4).fill(1.0),
+    indices: new Uint16Array([0, 1, 2, 0, 2, 3])
+  };
 };

@@ -302,14 +302,26 @@ class PreviewSystem {
 
         const modelInv = new Float32Array(16);
         const viewInv = new Float32Array(16);
+        const projectionInv = new Float32Array(16);
+        const viewProjection = new Float32Array(16);
+        const viewProjectionInv = new Float32Array(16);
+
         mat4.invert(modelInv, model);
         mat4.invert(viewInv, view);
+        mat4.invert(projectionInv, projection);
+
+        // VP = Projection * View
+        mat4.multiply(viewProjection, projection, view);
+        mat4.invert(viewProjectionInv, viewProjection);
 
         this.setUniformMatrix(program!, 'u_projection', projection);
         this.setUniformMatrix(program!, 'u_view', view);
         this.setUniformMatrix(program!, 'u_model', model);
         this.setUniformMatrix(program!, 'u_model_inv', modelInv);
         this.setUniformMatrix(program!, 'u_view_inv', viewInv);
+        this.setUniformMatrix(program!, 'u_projection_inv', projectionInv);
+        this.setUniformMatrix(program!, 'u_viewProjection', viewProjection);
+        this.setUniformMatrix(program!, 'u_viewProjection_inv', viewProjectionInv);
 
         // Bounds Uniforms
         const uBoundsMin = gl.getUniformLocation(program!, 'u_boundsMin');
