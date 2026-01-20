@@ -238,12 +238,21 @@ const castTo = (varName: string, from: string, to: string): string => {
         if (f === 'vec3') return `vec4(${varName}, 1.0)`;
     }
 
-    // Matrices (Simplified fallback)
-    if (t === 'mat3' && f === 'mat4') return `mat3(${varName})`;
-    if (t === 'mat4' && f === 'mat3') return `mat4(${varName})`;
+    // Matrices (WebGL 1.0 / GLSL ES 1.0 compatible manual construction)
+    if (t === 'mat4') {
+        if (f === 'mat3') return `mat4(vec4(${varName}[0], 0.0), vec4(${varName}[1], 0.0), vec4(${varName}[2], 0.0), vec4(0.0, 0.0, 0.0, 1.0))`;
+        if (f === 'mat2') return `mat4(vec4(${varName}[0], 0.0, 0.0), vec4(${varName}[1], 0.0, 0.0), vec4(0.0, 0.0, 1.0, 0.0), vec4(0.0, 0.0, 0.0, 1.0))`;
+    }
+    if (t === 'mat3') {
+        if (f === 'mat4') return `mat3(${varName}[0].xyz, ${varName}[1].xyz, ${varName}[2].xyz)`;
+        if (f === 'mat2') return `mat3(vec3(${varName}[0], 0.0), vec3(${varName}[1], 0.0), vec3(0.0, 0.0, 1.0))`;
+    }
+    if (t === 'mat2') {
+        if (f === 'mat4' || f === 'mat3') return `mat2(${varName}[0].xy, ${varName}[1].xy)`;
+    }
 
     // Safe component extraction when casting Matrix/Vector to a different Vector dimension
-    if ((t === 'vec3' || t === 'color') && f.startsWith('mat')) return `(${varName}[0])`;
+    if ((t === 'vec3' || t === 'color') && f.startsWith('mat')) return `(${varName}[0].xyz)`;
     if (t === 'vec4' && f.startsWith('mat')) return `vec4(${varName}[0], 1.0)`;
     if (f === 'vec4' && (t === 'mat3' || t === 'vec3' || t === 'color')) return `${varName}.xyz`;
 
