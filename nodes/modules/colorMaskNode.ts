@@ -7,7 +7,7 @@ export const colorMaskNode: NodeModule = {
     label: 'Color Mask',
     inputs: [
       { id: 'in', label: 'In', type: 'vec3' },
-      { id: 'maskColor', label: 'Mask Color', type: 'vec3' },
+      { id: 'maskColor', label: 'Mask Color', type: 'color' },
       { id: 'range', label: 'Range', type: 'float' },
       { id: 'fuzziness', label: 'Fuzziness', type: 'float' },
     ],

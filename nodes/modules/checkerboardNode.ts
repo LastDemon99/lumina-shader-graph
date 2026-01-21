@@ -7,8 +7,8 @@ export const checkerboardNode: NodeModule = {
     label: 'Checkerboard',
     inputs: [
       { id: 'uv', label: 'UV', type: 'vec2' },
-      { id: 'colorA', label: 'Color A', type: 'vec3' },
-      { id: 'colorB', label: 'Color B', type: 'vec3' },
+      { id: 'colorA', label: 'Color A', type: 'color' },
+      { id: 'colorB', label: 'Color B', type: 'color' },
       { id: 'freq', label: 'Frequency', type: 'vec2' },
     ],
     outputs: [{ id: 'out', label: 'Out', type: 'vec3' }],
