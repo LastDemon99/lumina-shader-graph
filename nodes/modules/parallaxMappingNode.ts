@@ -33,10 +33,10 @@ export const parallaxMappingNode: NodeModule = {
             bind: { scope: 'data', key: 'parallaxChannel' },
             select: {
               options: [
-                { label: 'R', value: 'r' },
-                { label: 'G', value: 'g' },
-                { label: 'B', value: 'b' },
-                { label: 'A', value: 'a' },
+                { label: 'Red', value: 'r' },
+                { label: 'Green', value: 'g' },
+                { label: 'Blue', value: 'b' },
+                { label: 'Alpha', value: 'a' },
               ],
             },
           },
