@@ -380,7 +380,23 @@ export const SceneView: React.FC<SceneViewProps> = ({
             const uBoundsMax = gl.getUniformLocation(programRef.current, 'u_boundsMax');
             if (uBoundsMax) gl.uniform3f(uBoundsMax, worldMax[0], worldMax[1], worldMax[2]);
 
+            // Transparency: to see back faces through front faces on the same mesh,
+            // draw back faces first and front faces second while disabling depth writes.
+            // This matches the node Preview behavior (PreviewSystem) and avoids the
+            // classic "transparent object looks opaque" self-occlusion problem.
+            gl.depthMask(false);
+            gl.enable(gl.CULL_FACE);
+
+            // Pass 1: draw back-facing triangles (the far panels)
+            gl.cullFace(gl.FRONT);
             gl.drawElements(gl.TRIANGLES, geo.indices.length, gl.UNSIGNED_SHORT, 0);
+
+            // Pass 2: draw front-facing triangles on top
+            gl.cullFace(gl.BACK);
+            gl.drawElements(gl.TRIANGLES, geo.indices.length, gl.UNSIGNED_SHORT, 0);
+
+            // Restore default depth write for any future draws
+            gl.depthMask(true);
 
             gl.deleteBuffer(posBuff);
             gl.deleteBuffer(normBuff);
