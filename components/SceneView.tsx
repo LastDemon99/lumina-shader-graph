@@ -36,6 +36,7 @@ export const SceneView: React.FC<SceneViewProps> = ({
     const canvasRef = useRef<HTMLCanvasElement>(null);
     const glRef = useRef<WebGLRenderingContext | null>(null);
     const programRef = useRef<WebGLProgram | null>(null);
+    const warnedMissingPositionRef = useRef(false);
     const reqIdRef = useRef<number>(0);
     const loadedTexturesRef = useRef<Record<string, WebGLTexture>>({});
     const loadedSourcesRef = useRef<Record<string, string>>({}); // Track sources to detect URL changes
@@ -130,8 +131,11 @@ export const SceneView: React.FC<SceneViewProps> = ({
         if (!gl) return;
 
         try {
-            if (programRef.current) gl.deleteProgram(programRef.current);
-            programRef.current = createProgram(gl, String(vertShader), String(fragShader));
+            const prev = programRef.current;
+            const next = createProgram(gl, String(vertShader), String(fragShader));
+            programRef.current = next;
+            warnedMissingPositionRef.current = false;
+            if (prev) gl.deleteProgram(prev);
         } catch (e: any) {
             const errorMessage = (e instanceof Error ? e.message : String(e)) || 'Unknown Shader Error';
             console.error("SceneView Shader Error:", errorMessage as string);
@@ -163,11 +167,15 @@ export const SceneView: React.FC<SceneViewProps> = ({
                 canvas.height = displayHeight;
                 gl.viewport(0, 0, displayWidth, displayHeight);
             }
-
-            gl.clearColor(0.05, 0.05, 0.05, 1.0);
-            gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
-
             gl.useProgram(programRef.current);
+
+            const getAttribLocationAny = (names: string[]): number => {
+                for (const n of names) {
+                    const loc = gl.getAttribLocation(programRef.current!, n);
+                    if (loc !== -1) return loc;
+                }
+                return -1;
+            };
 
             // Enable Alpha Blending for Master Preview transparency
             gl.enable(gl.BLEND);
@@ -210,17 +218,31 @@ export const SceneView: React.FC<SceneViewProps> = ({
             const geo = activeMesh === 'cube' ? cubeData.current :
                 activeMesh === 'sphere' ? sphereData.current : planeData.current;
 
+            // If the shader doesn't expose a usable position attribute, don't clear the canvas.
+            // This avoids the "scene reset" feeling when a temporary/invalid shader is produced during refine.
+            const posLoc = getAttribLocationAny(['position', 'a_position', 'aPosition', 'inPosition']);
+            if (posLoc === -1) {
+                if (!warnedMissingPositionRef.current) {
+                    warnedMissingPositionRef.current = true;
+                    console.warn('SceneView: shader missing required position attribute; keeping previous frame.');
+                }
+                reqIdRef.current = requestAnimationFrame(render);
+                return;
+            }
+
+            gl.clearColor(0.05, 0.05, 0.05, 1.0);
+            gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+
             const posBuff = gl.createBuffer();
             gl.bindBuffer(gl.ARRAY_BUFFER, posBuff);
             gl.bufferData(gl.ARRAY_BUFFER, geo.vertices, gl.STATIC_DRAW);
-            const posLoc = gl.getAttribLocation(programRef.current, 'position');
             gl.enableVertexAttribArray(posLoc);
             gl.vertexAttribPointer(posLoc, 3, gl.FLOAT, false, 0, 0);
 
             const normBuff = gl.createBuffer();
             gl.bindBuffer(gl.ARRAY_BUFFER, normBuff);
             gl.bufferData(gl.ARRAY_BUFFER, geo.normals, gl.STATIC_DRAW);
-            const normLoc = gl.getAttribLocation(programRef.current, 'normal');
+            const normLoc = getAttribLocationAny(['normal', 'a_normal', 'aNormal', 'inNormal']);
             if (normLoc !== -1) {
                 gl.enableVertexAttribArray(normLoc);
                 gl.vertexAttribPointer(normLoc, 3, gl.FLOAT, false, 0, 0);
@@ -229,7 +251,7 @@ export const SceneView: React.FC<SceneViewProps> = ({
             const uvBuff = gl.createBuffer();
             gl.bindBuffer(gl.ARRAY_BUFFER, uvBuff);
             gl.bufferData(gl.ARRAY_BUFFER, geo.uvs, gl.STATIC_DRAW);
-            const uvLoc = gl.getAttribLocation(programRef.current, 'uv');
+            const uvLoc = getAttribLocationAny(['uv', 'a_uv', 'aUV', 'texcoord', 'a_texcoord', 'aTexcoord', 'inUV']);
             if (uvLoc !== -1) {
                 gl.enableVertexAttribArray(uvLoc);
                 gl.vertexAttribPointer(uvLoc, 2, gl.FLOAT, false, 0, 0);
@@ -238,7 +260,7 @@ export const SceneView: React.FC<SceneViewProps> = ({
             const tanBuff = gl.createBuffer();
             gl.bindBuffer(gl.ARRAY_BUFFER, tanBuff);
             gl.bufferData(gl.ARRAY_BUFFER, geo.tangents, gl.STATIC_DRAW);
-            const tanLoc = gl.getAttribLocation(programRef.current, 'tangent');
+            const tanLoc = getAttribLocationAny(['tangent', 'a_tangent', 'aTangent', 'inTangent']);
             if (tanLoc !== -1) {
                 gl.enableVertexAttribArray(tanLoc);
                 gl.vertexAttribPointer(tanLoc, 4, gl.FLOAT, false, 0, 0);
@@ -283,14 +305,14 @@ export const SceneView: React.FC<SceneViewProps> = ({
             const uTime = gl.getUniformLocation(programRef.current, 'u_time');
             const uPreviewModeLoc = gl.getUniformLocation(programRef.current, 'u_previewMode');
 
-            gl.uniformMatrix4fv(uProj, false, projection);
-            gl.uniformMatrix4fv(uView, false, view);
-            gl.uniformMatrix4fv(uModel, false, model);
+            if (uProj) gl.uniformMatrix4fv(uProj, false, projection);
+            if (uView) gl.uniformMatrix4fv(uView, false, view);
+            if (uModel) gl.uniformMatrix4fv(uModel, false, model);
 
             if (uModelInv) gl.uniformMatrix4fv(uModelInv, false, modelInv);
             if (uViewInv) gl.uniformMatrix4fv(uViewInv, false, viewInv);
 
-            gl.uniform1f(uTime, time / 1000);
+            if (uTime) gl.uniform1f(uTime, time / 1000);
             if (uPreviewModeLoc) gl.uniform1i(uPreviewModeLoc, mode === '3d' ? 1 : 0);
 
             // Viewport Uniform (Full screen for Scene View)

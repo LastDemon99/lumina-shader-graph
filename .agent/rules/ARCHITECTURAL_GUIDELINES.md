@@ -118,6 +118,8 @@ The "AI Assist" functionality is not a simple API call; it's a structured pipeli
 
 1.  **Orchestrator (`services/geminiService.ts`):**
     *   Implements the implicit **Chain-of-Thought** pattern.
+    *   **Primary Model:** MUST use `gemini-3-flash-preview` (AI-3-Flash) for its advanced reasoning and speed.
+    *   **Thinking Mode:** Always enabled via `thinkingConfig: { includeThoughts: true }` to capture the reasoning process.
     *   **Phase 1 (Drafting):** Interprets the user's prompt and generates a raw JSON of the graph.
     *   **Phase 2 (Refining):** Receives the Linter report and fixes connection errors or isolated nodes.
 
@@ -218,3 +220,16 @@ interface TextureConfig {
 
 ### 7.2. Texture 2D Arrays (Compatibility)
 Since WebGL 1.0 does not support `Texture2DArray`, a **Vertical Texture Atlas** strategy is used.
+
+## 8. AI Behavioral & Documentation Rules
+
+### 8.1. API Knowledge Source
+*   **Mandate:** Do NOT rely on training data for Gemini API features (Model IDs, Config Params, thinking steps).
+*   **Source of Truth:** ALWAYS use the documentation at `https://ai.google.dev/gemini-api/docs/` as the updated reference.
+*   **Specifics for Gemini 3:**
+    *   Use `gemini-3-flash-preview` as the stable architectural choice.
+    *   Utilize `parts` in the response to extract `thought` data separately from `text` content.
+
+### 8.2. Graph Injection Strategy (Cognitive Ease)
+*   **Avoid Raw JSON Dumps:** When feeding node definitions to the model, use structured Schema summaries (e.g., `- node_name: Inputs[...] -> Outputs[...]`) instead of dumping the entire TypeScript file.
+*   **Continuity:** The model MUST be aware of the exact socket IDs (inputs/outputs) of every node in the `nodes/modules` folder to prevent connection hallucinations.

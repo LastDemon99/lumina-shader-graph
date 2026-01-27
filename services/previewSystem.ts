@@ -415,6 +415,78 @@ class PreviewSystem {
         const loc = this.gl!.getUniformLocation(program, name);
         if (loc) this.gl!.uniformMatrix4fv(loc, false, data);
     }
+
+    /**
+     * Captures a snapshot of a specific preview item as a Base64 Image.
+     */
+    capturePreview(id: string, forceTime?: number): string | null {
+        const item = this.items.get(id);
+        if (!item || !this.gl || !this.canvas) return null;
+
+        const gl = this.gl;
+        const dpr = window.devicePixelRatio || 1;
+        const rect = item.element.getBoundingClientRect();
+        const canvasRect = this.canvas.getBoundingClientRect();
+
+        const width = Math.floor(rect.width * dpr);
+        const height = Math.floor(rect.height * dpr);
+        const x = Math.floor((rect.left - canvasRect.left) * dpr);
+        const y = Math.floor(this.canvas.height - ((rect.top - canvasRect.top) * dpr) - height);
+
+        if (width <= 0 || height <= 0) return null;
+
+        // Force a render at a specific time if requested
+        if (forceTime !== undefined) {
+            this.renderItem(item, forceTime * 1000, dpr, canvasRect);
+        }
+
+        const pixels = new Uint8Array(width * height * 4);
+        gl.readPixels(x, y, width, height, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
+
+        const tempCanvas = document.createElement('canvas');
+        tempCanvas.width = width;
+        tempCanvas.height = height;
+        const ctx = tempCanvas.getContext('2d');
+        if (!ctx) return null;
+
+        const imageData = ctx.createImageData(width, height);
+        for (let row = 0; row < height; row++) {
+            const srcRow = row;
+            const dstRow = height - 1 - row;
+            const srcOffset = srcRow * width * 4;
+            const dstOffset = dstRow * width * 4;
+            imageData.data.set(pixels.slice(srcOffset, srcOffset + width * 4), dstOffset);
+        }
+        ctx.putImageData(imageData, 0, 0);
+
+        return tempCanvas.toDataURL('image/png');
+    }
+
+    /**
+     * NEW: Deterministic Time-Warped Frame Simulation.
+     * Captures a sequence of frames for motion analysis (Visual QC Stage 2).
+     */
+    async captureSequence(id: string, duration: number = 2.0, fps: number = 5): Promise<string[]> {
+        const item = this.items.get(id);
+        if (!item || !this.gl || !this.canvas) return [];
+
+        const frames: string[] = [];
+        const totalFrames = Math.max(2, duration * fps);
+
+        // Temporarily pause global loop if necessary? 
+        // No, we can just interleave or render over.
+
+        for (let i = 0; i < totalFrames; i++) {
+            const t = (i / (totalFrames - 1)) * duration;
+            const img = this.capturePreview(id, t);
+            if (img) frames.push(img);
+
+            // Allow brief breathing room for browser UI
+            if (i % 2 === 0) await new Promise(r => requestAnimationFrame(r));
+        }
+
+        return frames;
+    }
 }
 
 export const previewSystem = new PreviewSystem();

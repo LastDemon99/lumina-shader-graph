@@ -158,6 +158,7 @@ export interface NodeData {
   previewCollapsed?: boolean; // Persist if the node preview is collapsed
   nodeCollapsed?: boolean; // NEW: Persist if the entire node is collapsed (Unity style)
   gradientStops?: GradientStop[]; // For Gradient Node
+  headerColor?: string; // Custom header color (Tailwind class or hex)
 }
 
 export interface ShaderNode {

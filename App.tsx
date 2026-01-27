@@ -4,6 +4,7 @@ import { Node } from './components/Node';
 import { Preview } from './components/Preview';
 import { SceneView } from './components/SceneView';
 import { GlobalCanvas } from './components/GlobalCanvas'; // Import Global Canvas
+import { GeminiAssistantSidebar } from './components/GeminiAssistantSidebar';
 import { generateFragmentShader, generateVertexShader } from './services/glslGenerator';
 import { geminiService } from './services/geminiService';
 import { lintGraph } from './services/linter';
@@ -11,6 +12,7 @@ import { ShaderNode, Connection, Viewport, NodeType, SocketType } from './types'
 import { INITIAL_NODES, INITIAL_CONNECTIONS } from './initialGraph';
 import { NODE_LIST, getNodeModule } from './nodes';
 import { getEffectiveSockets } from './nodes/runtime';
+import { previewSystem } from './services/previewSystem';
 import { Wand2, Download, Upload, ZoomIn, ZoomOut, MousePointer2, Box, Square, Save, Layers, Network, CheckCircle2, Loader2, Sparkles, FileJson, AlertCircle, Plus, FilePlus, Circle, AppWindow } from 'lucide-react';
 
 const App: React.FC = () => {
@@ -69,9 +71,7 @@ const App: React.FC = () => {
   const [contextMenu, setContextMenu] = useState<{ x: number, y: number, open: boolean } | null>(null);
   const [contextSearch, setContextSearch] = useState('');
 
-  // AI Prompt
-  const [promptOpen, setPromptOpen] = useState(false);
-  const [promptText, setPromptText] = useState<string>('');
+
 
   // AI Status State
   const [generationPhase, setGenerationPhase] = useState<'idle' | 'drafting' | 'linting' | 'refining'>('idle');
@@ -82,6 +82,24 @@ const App: React.FC = () => {
   const [fileName, setFileName] = useState<string>('shader-graph');
   const [isSaved, setIsSaved] = useState(true); // Track unsaved changes slightly (visual only)
   const [fileSystemError, setFileSystemError] = useState<boolean>(false); // Track if FSA API is blocked
+
+  // Some browser extensions emit noisy unhandled rejections (chrome.runtime message channel closed).
+  // In dev, this can look like an app failure; filter the known pattern only.
+  useEffect(() => {
+    const handler = (event: PromiseRejectionEvent) => {
+      const reason: any = (event as any).reason;
+      const msg = (reason && (reason.message || reason.toString?.())) ? String(reason.message || reason.toString()) : '';
+      if (
+        msg.includes('A listener indicated an asynchronous response') &&
+        msg.includes('message channel closed')
+      ) {
+        event.preventDefault();
+      }
+    };
+
+    window.addEventListener('unhandledrejection', handler);
+    return () => window.removeEventListener('unhandledrejection', handler);
+  }, []);
 
   // Derived - Master Shader
   const fragShader = useMemo(() => {
@@ -712,42 +730,143 @@ const App: React.FC = () => {
     return { x: node.x + (isInput ? -9 : 169), y: node.y + 50 };
   };
 
-  const handleGeminiGenerate = async () => {
-    if (!promptText) return;
+  const formatClarificationHistory = (history: ShaderClarificationHistoryItem[]): string => {
+    const lines: string[] = ['CLARIFICATIONS:'];
+    history.forEach(item => {
+      if (!item?.label) return;
+      lines.push(`- ${item.label}: ${item.answer}`);
+    });
+    return lines.join('\n');
+  };
+
+  const runGeminiPipeline = async (prompt: string, attachment?: string) => {
+    if (!prompt && !attachment) return;
+
     setGenerationPhase('drafting');
-    setLinterLogs([]);
-    const promptStr = String(promptText || '');
-    const draft = await geminiService.generateOrModifyGraph(promptStr, nodes, connections);
+    setLinterLogs(['Analyzing request...']);
+
+    const handleLog = (msg: string) => {
+      setLinterLogs(prev => [...prev, msg]);
+    };
+
+    const handleUpdate = (draftNodes: any[], draftConnections: any[]) => {
+      const mappedNodes: ShaderNode[] = draftNodes.map((n: any) => {
+        const mod = getNodeModule(n.type);
+        const initialData = mod?.initialData ? (mod.initialData(n.id) as any) : {};
+        const aiData = (n.data && typeof n.data === 'object') ? { ...n.data } : {};
+        if (n.dataValue !== undefined && aiData.value === undefined) aiData.value = n.dataValue;
+
+        const node: ShaderNode = {
+          ...getDefinitionOrPlaceholder(n.type),
+          id: n.id,
+          x: n.x ?? 0,
+          y: n.y ?? 0,
+          data: { ...initialData, ...aiData },
+        };
+        if (node.type === 'remap' && !node.data.inputValues) node.data.inputValues = { inMinMax: { x: -1, y: 1 }, outMinMax: { x: 0, y: 1 } };
+        return node;
+      });
+      setNodes(mappedNodes);
+      setConnections(draftConnections.map((c: any) => ({ ...c, id: c.id || `conn-${Math.random()}` })));
+    };
+
+    const handleVisualRequest = async (nodeId: string) => {
+      // Small tick to ensure React state update -> DOM update -> Canvas render
+      await new Promise(r => requestAnimationFrame(r));
+
+      const isAnimated = /agua|movimiento|onda|fluir|viento|anima|time|tiempo/i.test(prompt);
+
+      if (isAnimated) {
+        // Capture 5 frames over 2 seconds for motion analysis
+        return previewSystem.captureSequence(nodeId, 2.0, 2.5);
+      } else {
+        return previewSystem.capturePreview(nodeId);
+      }
+    };
+
+    const draft = await geminiService.generateOrModifyGraph(prompt, nodes, connections, attachment, handleLog, handleUpdate, handleVisualRequest);
     if (!draft || !draft.nodes) {
+      setLinterLogs(prev => [...prev, 'Failed to generate draft.']);
       setGenerationPhase('idle');
       return;
     }
-    const draftNodes: ShaderNode[] = draft.nodes.map((n: any) => ({
-      ...getDefinitionOrPlaceholder(n.type),
-      id: n.id,
-      x: n.x,
-      y: n.y,
-      data: { value: n.dataValue }
-    }));
-    const draftConnections: Connection[] = draft.connections.map((c: any) => ({ ...c, id: c.id || `conn-${Math.random()}` }));
+
+    // Final Architecture Polish
     setGenerationPhase('linting');
-    const logs = lintGraph(draftNodes, draftConnections);
-    setLinterLogs(logs);
-    setGenerationPhase('refining');
-    const refined = await geminiService.refineGraph(draft, logs);
-    if (refined && refined.nodes) {
-      const newNodes: ShaderNode[] = refined.nodes.map((n: any) => ({
+    const finalNodes = draft.nodes.map((n: any) => {
+      const mod = getNodeModule(n.type);
+      const initialData = mod?.initialData ? (mod.initialData(n.id) as any) : {};
+      const aiData = (n.data && typeof n.data === 'object') ? { ...n.data } : {};
+      if (n.dataValue !== undefined && aiData.value === undefined) aiData.value = n.dataValue;
+
+      const node: ShaderNode = {
         ...getDefinitionOrPlaceholder(n.type),
         id: n.id,
-        x: n.x,
-        y: n.y,
-        data: { value: n.dataValue }
-      }));
-      setNodes(newNodes);
-      setConnections(refined.connections.map((c: any) => ({ ...c, id: c.id || `conn-${Math.random()}` })));
-      setPromptOpen(false);
+        x: n.x ?? 0,
+        y: n.y ?? 0,
+        data: { ...initialData, ...aiData },
+      };
+      if (node.type === 'remap' && !node.data.inputValues) node.data.inputValues = { inMinMax: { x: -1, y: 1 }, outMinMax: { x: 0, y: 1 } };
+      return node;
+    });
+    const finalConns = draft.connections.map((c: any) => ({ ...c, id: c.id || `conn-${Math.random()}` }));
+
+    const logs = lintGraph(finalNodes, finalConns);
+    setLinterLogs(prev => [...prev, logs.length > 0 ? 'Linter found issues. Fixing...' : 'Graph structure validated.']);
+
+    setGenerationPhase('refining');
+
+    // Final Visual QC Pass
+    await new Promise(r => requestAnimationFrame(r));
+    const finalImage = previewSystem.capturePreview('output') || previewSystem.capturePreview(finalNodes[finalNodes.length - 1].id);
+
+    const refined = await geminiService.refineGraph(draft, logs, handleLog, finalImage || undefined);
+
+    // Choose refined version only if it is not degenerate.
+    // Some refinement responses can accidentally return only the master nodes (vertex/output),
+    // which would look like the scene was "cleared".
+    const isUsableGraph = (g: any) => {
+      const nodesArr = Array.isArray(g?.nodes) ? g.nodes : [];
+      const connsArr = Array.isArray(g?.connections) ? g.connections : [];
+      const hasNonMasterNode = nodesArr.some((n: any) => n && n.id && n.id !== 'output' && n.id !== 'vertex');
+      const hasAnyConnection = connsArr.length > 0;
+      const hasOutputIncoming = connsArr.some((c: any) => c && c.targetNodeId === 'output');
+      return hasNonMasterNode && hasAnyConnection && hasOutputIncoming;
+    };
+
+    const finalResult = (refined && isUsableGraph(refined)) ? refined : draft;
+    if (refined && finalResult === draft) {
+      setLinterLogs(prev => [...prev, 'Refine produced a degenerate graph; keeping the draft to avoid clearing the scene.']);
     }
+
+    const newNodes: ShaderNode[] = finalResult.nodes.map((n: any) => {
+      const mod = getNodeModule(n.type);
+      const initialData = mod?.initialData ? (mod.initialData(n.id) as any) : {};
+      const aiData = (n.data && typeof n.data === 'object') ? { ...n.data } : {};
+      if (n.dataValue !== undefined && aiData.value === undefined) aiData.value = n.dataValue;
+
+      const node: ShaderNode = {
+        ...getDefinitionOrPlaceholder(n.type),
+        id: n.id,
+        x: n.x ?? 0,
+        y: n.y ?? 0,
+        data: { ...initialData, ...aiData },
+      };
+      if (node.type === 'remap' && !node.data.inputValues) node.data.inputValues = { inMinMax: { x: -1, y: 1 }, outMinMax: { x: 0, y: 1 } };
+      return node;
+    });
+
+    const newConnections: Connection[] = finalResult.connections.map((c: any) => ({ ...c, id: c.id || `conn-${Math.random()}` }));
+
+    setNodes(newNodes);
+    setConnections(newConnections);
+
     setGenerationPhase('idle');
+  };
+
+  const handleGeminiGenerate = async (prompt: string, attachment?: string) => {
+    if (!prompt && !attachment) return;
+    await runGeminiPipeline(prompt, attachment);
   };
 
   const renderConnections = () => {
@@ -818,29 +937,17 @@ const App: React.FC = () => {
       </div>
 
       <div className="flex-1 relative overflow-hidden flex">
-        <div className={`w-full h-full absolute inset-0 flex flex-col ${activeTab === 'graph' ? 'z-10' : 'z-0 invisible'}`}>
+        {/* New Sidebar */}
+        <GeminiAssistantSidebar
+          onGenerate={handleGeminiGenerate}
+          generationPhase={generationPhase}
+          logs={linterLogs}
+        />
+
+        <div className={`flex-1 h-full relative flex flex-col ${activeTab === 'graph' ? 'z-10' : 'z-0 invisible'}`}>
           <div className="absolute inset-0 w-full h-full graph-grid z-0 pointer-events-none opacity-50" />
           <GlobalCanvas />
-          <div className={`absolute top-4 left-4 z-20 flex flex-col gap-4 w-64 pointer-events-none ${activeTab === 'graph' ? 'opacity-100' : 'opacity-0'}`}>
-            {/* Tools Toolbar */}
-            <div className="bg-[#1e1e1e] border border-gray-700 p-2 rounded-xl shadow-2xl pointer-events-auto flex flex-col shrink-0">
-              <div className="flex gap-2 shrink-0">
-                <button onClick={() => setPromptOpen(!promptOpen)} className="flex-1 bg-indigo-600 hover:bg-indigo-700 text-white text-xs py-2 rounded flex justify-center items-center gap-2 transition-colors shadow-lg"> <Wand2 className="w-3 h-3" /> AI Assist </button>
-              </div>
-            </div>
-            {/* AI Prompt Window */}
-            {promptOpen && (
-              <div className="bg-[#1e1e1e] border border-indigo-500 p-4 rounded-xl shadow-2xl pointer-events-auto animate-in slide-in-from-left-10 fade-in duration-200 shrink-0">
-                <textarea className="w-full bg-black border border-gray-700 rounded p-2 text-xs text-white mb-2 focus:outline-none focus:border-indigo-500" placeholder="Describe a shader..." rows={3} value={promptText} onChange={e => setPromptText(e.target.value)} />
-                <div className="space-y-2">
-                  <button onClick={handleGeminiGenerate} disabled={generationPhase !== 'idle'} className="w-full bg-indigo-600 hover:bg-indigo-500 text-white text-xs py-2 rounded flex justify-center items-center gap-2 transition-colors">
-                    {generationPhase === 'idle' && <>Generate Graph</>}
-                    {generationPhase !== 'idle' && <><Loader2 className="w-3 h-3 animate-spin" /> Processing...</>}
-                  </button>
-                </div>
-              </div>
-            )}
-          </div>
+          {/* Old AI UI Removed */}
 
           <div className={`absolute top-4 right-4 w-72 z-20 pointer-events-auto flex flex-col gap-2 ${activeTab === 'graph' ? 'opacity-100' : 'opacity-0'}`}>
             <div className="w-full h-72 bg-black rounded-lg overflow-hidden border border-gray-700 shadow-xl relative group">
@@ -970,6 +1077,7 @@ const App: React.FC = () => {
           <SceneView fragShader={fragShader} vertShader={vertShader} active={activeTab === 'scene'} textures={textureUniforms} />
         </div>
       </div>
+      {/* Fullscreen Overlay Disabled for Dev Mode
       {generationPhase !== 'idle' && (
         <div className="absolute inset-0 z-[100] bg-black/80 backdrop-blur-sm flex flex-col items-center justify-center animate-in fade-in duration-300 cursor-wait">
           <div className="relative mb-4">
@@ -983,7 +1091,8 @@ const App: React.FC = () => {
             {generationPhase === 'refining' && <><Sparkles className="w-4 h-4 animate-pulse" /> Refining...</>}
           </div>
         </div>
-      )}
+      )} 
+      */}
     </div>
   );
 };

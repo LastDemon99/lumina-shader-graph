@@ -164,12 +164,14 @@ export const Node: React.FC<NodeProps> = ({
     const isWide = registryUi?.width === 'wide' || LEGACY_WIDE_NODE_TYPES.includes(node.type);
     const isExtraWide = registryUi?.width === 'extraWide';
 
-    // Header Style Setup: Metadata > Specific Legacy (Object) > Default
-    const headerColorClass = nodeModule?.metadata?.headerColor
-        ? nodeModule.metadata.headerColor
-        : (node.type === 'object'
-            ? 'bg-[#eab308]/90 border-yellow-500 text-white shadow-inner'
-            : 'bg-[#2a2a2a]');
+    // Header Style Setup: Instance Override > Metadata > Specific Legacy > Default
+    const headerColorClass = node.data.headerColor
+        ? node.data.headerColor
+        : (nodeModule?.metadata?.headerColor
+            ? nodeModule.metadata.headerColor
+            : (node.type === 'object'
+                ? 'bg-[#eab308]/90 border-yellow-500 text-white shadow-inner'
+                : 'bg-[#2a2a2a]'));
 
     const setPreviewMode = (mode: '2d' | '3d') => {
         onUpdateData(node.id, { previewMode: mode });
