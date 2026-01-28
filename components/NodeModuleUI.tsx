@@ -3,7 +3,7 @@ import type { GradientStop, ShaderNode } from '../types';
 import type { ControlSpec, NodeUiSpec } from '../nodes/types';
 import { evaluateCondition } from '../nodes/runtime';
 import type { Connection } from '../types';
-import { createTextureAtlas, processTextureFile } from '../services/textureUtils';
+import { createTextureAtlas, processTextureFile } from '../services/render/textureUtils';
 import { CheckSquare, ChevronDown, Loader2, Plus, Square as SquareIcon, Trash2, Upload, X, Layers } from 'lucide-react';
 
 type BindTarget = 'data' | 'inputValues';

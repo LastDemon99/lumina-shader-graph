@@ -1,14 +1,20 @@
 
 import { GoogleGenAI, Type, Schema, ThinkingLevel } from "@google/genai";
-import { ShaderNode, Connection } from "../types";
-import { ALL_NODE_TYPES, getNodeModule } from "../nodes";
-import { getEffectiveSockets, getFallbackSocketId } from "../nodes/runtime";
+import { ShaderNode, Connection } from "../../types";
+import { ALL_NODE_TYPES, getNodeModule } from "../../nodes";
+import { getEffectiveSockets, getFallbackSocketId } from "../../nodes/runtime";
 import { lintGraph } from "./linter";
 import architectInstructions from "./agent-instructions/shader-architect.md?raw";
 import refinerInstructions from "./agent-instructions/shader-refiner.md?raw";
 
 export class GeminiService {
-  private modelId = 'gemini-3-flash-preview';
+  private modelId = 'gemini-2.5-flash'; // (2.5 temporal for test) 'gemini-3-flash-preview';
+
+  // Native image generation model ("Nano Banana"-style). Override via env.
+  private imageModelId =
+    (import.meta as any).env?.VITE_GEMINI_IMAGE_MODEL ||
+    import.meta.env.VITE_GEMINI_IMAGE_MODEL ||
+    'gemini-2.5-flash-image'; // (2.5 temporal for test) 'gemini-3-pro-image-preview';
 
   private thinkingConfig = {
     thinkingLevel: ThinkingLevel.LOW,
@@ -42,6 +48,13 @@ export class GeminiService {
 
   private cleanBase64(dataUrlOrBase64: string): string {
     return String(dataUrlOrBase64 || '').replace(/^data:[^;]+;base64,/, "");
+  }
+
+  private parseDataUrl(dataUrl: string): { mimeType: string; data: string } | null {
+    const str = String(dataUrl || '');
+    const m = /^data:([^;]+);base64,(.+)$/i.exec(str);
+    if (!m) return null;
+    return { mimeType: m[1], data: m[2] };
   }
 
   private async generateContentText(ai: GoogleGenAI, request: any, onLog?: (msg: string) => void): Promise<string> {
@@ -126,6 +139,425 @@ export class GeminiService {
     const apiKey = this.getApiKey();
     if (!apiKey) return null;
     return new GoogleGenAI({ apiKey });
+  }
+
+  async inferTextureRequest(
+    userPrompt: string,
+    onLog?: (msg: string) => void
+  ): Promise<{
+    imagePrompt: string;
+    target: { nodeId: string; socketId: string };
+    operation: 'multiply' | 'replace';
+    channel: 'rgba' | 'rgb' | 'r' | 'g' | 'b' | 'a';
+  } | null> {
+    const ai = this.createClient();
+    if (!ai) {
+      onLog?.('Missing Gemini API key (VITE_GEMINI_API_KEY).');
+      return null;
+    }
+
+    const prompt = String(userPrompt || '').trim();
+    if (!prompt) return null;
+
+    const instruction = [
+      'You are helping a node-based shader editor.',
+      'Task: infer (1) the best image generation prompt for a texture and (2) where to apply it in the shader graph.',
+      'Return ONLY valid JSON, no markdown.',
+      '',
+      'Output JSON schema:',
+      '{',
+      '  "imagePrompt": string,',
+      '  "target": { "nodeId": "output", "socketId": one of ["color","alpha","normal","specular","smoothness","occlusion","emission"] },',
+      '  "operation": "multiply" | "replace",',
+      '  "channel": one of ["rgba","rgb","r","g","b","a"]',
+      '}',
+      '',
+      'Guidelines:',
+      '- If user says normal/normalmap/bump -> target.socketId="normal" and channel="rgba".',
+      '- If user says alpha/opacity/mask -> target.socketId="alpha" and channel="a" unless specified.',
+      '- If user says specular -> target.socketId="specular" channel="r" unless specified.',
+      '- If user says roughness -> target.socketId="smoothness" and operation="replace" (roughness is inverse of smoothness, but if unsure choose smoothness replace).',
+      '- Default: target.socketId="color", operation="multiply", channel="rgba".',
+      '- imagePrompt must describe a seamless, tileable texture suitable for realtime shading.',
+      '',
+      'User request:',
+      prompt,
+    ].join('\n');
+
+    onLog?.('Inferring texture intent (prompt + target)...');
+
+    try {
+      const result = await ai.models.generateContent({
+        model: this.modelId,
+        contents: [{ role: 'user', parts: [{ text: instruction }] }],
+        config: {
+          responseMimeType: 'application/json',
+          thinkingConfig: this.thinkingConfig,
+        },
+      } as any);
+
+      // Best-effort extraction across SDK shapes.
+      const candidate = (result as any)?.candidates?.[0] || (result as any)?.response?.candidates?.[0];
+      const parts: any[] = candidate?.content?.parts || [];
+      const text = parts
+        .filter((p: any) => p && !p.thought && p.text)
+        .map((p: any) => String(p.text))
+        .join('')
+        .trim();
+
+      if (!text) return null;
+      const json = this.safeJsonParse(text);
+
+      const imagePrompt = String(json?.imagePrompt || '').trim();
+      const nodeId = String(json?.target?.nodeId || 'output');
+      const socketId = String(json?.target?.socketId || 'color');
+      const operation = (json?.operation === 'replace' ? 'replace' : 'multiply') as 'multiply' | 'replace';
+      const channel = (["rgba", "rgb", "r", "g", "b", "a"].includes(json?.channel) ? json.channel : 'rgba') as any;
+
+      const allowedSockets = new Set(['color', 'alpha', 'normal', 'specular', 'smoothness', 'occlusion', 'emission']);
+      const finalSocketId = allowedSockets.has(socketId) ? socketId : 'color';
+      const finalNodeId = nodeId || 'output';
+
+      if (!imagePrompt) return null;
+
+      return {
+        imagePrompt,
+        target: { nodeId: finalNodeId, socketId: finalSocketId },
+        operation,
+        channel,
+      };
+    } catch (e: any) {
+      onLog?.(`Intent inference failed, using defaults. (${e?.message || String(e)})`);
+      return null;
+    }
+  }
+
+  async inferAssetRequest(
+    userPrompt: string,
+    onLog?: (msg: string) => void
+  ): Promise<{
+    assetName: string;
+    apply: boolean;
+    applyPlan?: {
+      target: { nodeId: string; socketId: string };
+      operation: 'multiply' | 'replace';
+      channel: 'rgba' | 'rgb' | 'r' | 'g' | 'b' | 'a';
+    };
+  } | null> {
+    const ai = this.createClient();
+    if (!ai) {
+      onLog?.('Missing Gemini API key (VITE_GEMINI_API_KEY).');
+      return null;
+    }
+
+    const prompt = String(userPrompt || '').trim();
+    if (!prompt) return null;
+
+    const instruction = [
+      'You are helping a node-based shader editor.',
+      'Task: interpret a user command that adds an uploaded image as a reusable texture asset.',
+      'Return ONLY valid JSON, no markdown.',
+      '',
+      'Output JSON schema:',
+      '{',
+      '  "assetName": string,',
+      '  "apply": boolean,',
+      '  "applyPlan"?: {',
+      '    "target": { "nodeId": "output", "socketId": one of ["color","alpha","normal","specular","smoothness","occlusion","emission"] },',
+      '    "operation": "multiply" | "replace",',
+      '    "channel": one of ["rgba","rgb","r","g","b","a"]',
+      '  }',
+      '}',
+      '',
+      'Rules:',
+      '- assetName: short, filesystem-like token, lowercase, use dashes, no spaces. Example: "crystal-base".',
+      '- If the user indicates a destination (e.g., "para el base color", "for alpha", "as normal map"), treat that as apply=true and fill applyPlan.',
+      '- If user explicitly asks to apply/use/connect it now, set apply=true and fill applyPlan.',
+      '- If user only says to save/add to library and does NOT imply usage, apply=false.',
+      '- If user says base/albedo/color -> target.socketId="color" operation="multiply" channel="rgba".',
+      '- If alpha/opacity/mask -> target.socketId="alpha" operation="replace" channel="a" unless user says multiply.',
+      '- If normal/normalmap/bump -> target.socketId="normal" operation="replace" channel="rgba".',
+      '- If specular -> target.socketId="specular" operation="replace" channel="r".',
+      '- If roughness -> target.socketId="smoothness" operation="replace" channel="r" (assume already smoothness map unless told otherwise).',
+      '',
+      'User request:',
+      prompt,
+    ].join('\n');
+
+    onLog?.('Inferring asset intent (name + optional apply)...');
+
+    try {
+      const result = await ai.models.generateContent({
+        model: this.modelId,
+        contents: [{ role: 'user', parts: [{ text: instruction }] }],
+        config: {
+          responseMimeType: 'application/json',
+          thinkingConfig: this.thinkingConfig,
+        },
+      } as any);
+
+      const candidate = (result as any)?.candidates?.[0] || (result as any)?.response?.candidates?.[0];
+      const parts: any[] = candidate?.content?.parts || [];
+      const text = parts
+        .filter((p: any) => p && !p.thought && p.text)
+        .map((p: any) => String(p.text))
+        .join('')
+        .trim();
+
+      if (!text) return null;
+      const json = this.safeJsonParse(text);
+
+      const rawName = String(json?.assetName || '').trim().toLowerCase();
+      const assetName = rawName
+        .replace(/[^a-z0-9-_]+/g, '-')
+        .replace(/-+/g, '-')
+        .replace(/^-|-$/g, '') || 'asset';
+
+      const apply = Boolean(json?.apply) || Boolean(json?.applyPlan);
+      if (!apply) return { assetName, apply: false };
+
+      const plan = json?.applyPlan;
+      const socketId = String(plan?.target?.socketId || 'color');
+      const allowedSockets = new Set(['color', 'alpha', 'normal', 'specular', 'smoothness', 'occlusion', 'emission']);
+      const finalSocketId = allowedSockets.has(socketId) ? socketId : 'color';
+      const nodeId = String(plan?.target?.nodeId || 'output') || 'output';
+      const operation = (plan?.operation === 'replace' ? 'replace' : 'multiply') as 'multiply' | 'replace';
+      const channel = (["rgba", "rgb", "r", "g", "b", "a"].includes(plan?.channel) ? plan.channel : 'rgba') as any;
+
+      return {
+        assetName,
+        apply: true,
+        applyPlan: {
+          target: { nodeId, socketId: finalSocketId },
+          operation,
+          channel,
+        },
+      };
+    } catch (e: any) {
+      onLog?.(`Asset intent inference failed, using defaults. (${e?.message || String(e)})`);
+      return null;
+    }
+  }
+
+  async inferEditAssetTarget(
+    userPrompt: string,
+    assets: Array<{ id: string; name: string }>,
+    chatContext?: Array<{ role: 'user' | 'assistant' | 'system'; content: string }>,
+    onLog?: (msg: string) => void
+  ): Promise<{ assetId: string } | null> {
+    const ai = this.createClient();
+    if (!ai) {
+      onLog?.('Missing Gemini API key (VITE_GEMINI_API_KEY).');
+      return null;
+    }
+
+    const prompt = String(userPrompt || '').trim();
+    if (!prompt) return null;
+
+    const safeAssets = (Array.isArray(assets) ? assets : [])
+      .filter(a => a && a.id && a.name)
+      .slice(0, 50)
+      .map(a => ({ id: String(a.id), name: String(a.name) }));
+
+    const safeChat = (Array.isArray(chatContext) ? chatContext : [])
+      .filter(m => m && m.role && typeof m.content === 'string')
+      .slice(-12)
+      .map(m => ({ role: m.role, content: String(m.content).slice(0, 500) }));
+
+    if (safeAssets.length === 0) return null;
+
+    const instruction = [
+      'You are helping a node-based shader editor.',
+      'Task: choose which existing texture asset the user most likely wants to EDIT.',
+      'Return ONLY valid JSON, no markdown.',
+      '',
+      'Output JSON schema:',
+      '{ "assetId": string }',
+      '',
+      'Rules:',
+      '- Pick exactly one assetId from the provided asset list.',
+      '- Prefer assets whose name matches words in the user request (Spanish/English).',
+      '- If user says "último"/"latest" pick the most recent (the list is ordered most-recent last).',
+      '- If unsure, pick the most relevant by name; never invent IDs.',
+      '- Use CHAT_CONTEXT to resolve pronouns and references like "esa", "la del vidrio", "la anterior".',
+      '',
+      'CHAT_CONTEXT (most recent last):',
+      JSON.stringify(safeChat),
+      '',
+      'ASSET_LIST (ordered oldest -> newest):',
+      JSON.stringify(safeAssets),
+      '',
+      'USER_REQUEST:',
+      prompt,
+    ].join('\n');
+
+    onLog?.('Inferring which asset to edit...');
+
+    try {
+      const result = await ai.models.generateContent({
+        model: this.modelId,
+        contents: [{ role: 'user', parts: [{ text: instruction }] }],
+        config: {
+          responseMimeType: 'application/json',
+          thinkingConfig: this.thinkingConfig,
+        },
+      } as any);
+
+      const candidate = (result as any)?.candidates?.[0] || (result as any)?.response?.candidates?.[0];
+      const parts: any[] = candidate?.content?.parts || [];
+      const text = parts
+        .filter((p: any) => p && !p.thought && p.text)
+        .map((p: any) => String(p.text))
+        .join('')
+        .trim();
+
+      if (!text) return null;
+      const json = this.safeJsonParse(text);
+      const assetId = String(json?.assetId || '').trim();
+      if (!assetId) return null;
+
+      const isValid = safeAssets.some(a => a.id === assetId);
+      if (!isValid) return null;
+
+      return { assetId };
+    } catch (e: any) {
+      onLog?.(`Asset selection inference failed. (${e?.message || String(e)})`);
+      return null;
+    }
+  }
+
+  /**
+   * Generates a texture image (data URL) using Gemini native image generation.
+   * If referenceImageDataUrl is an image/* data URL, it will be provided as an input.
+   */
+  async generateTextureDataUrl(
+    prompt: string,
+    referenceImageDataUrl?: string,
+    onLog?: (msg: string) => void
+  ): Promise<{ dataUrl: string; mimeType: string; text?: string } | null> {
+    const ai = this.createClient();
+    if (!ai) {
+      onLog?.('Missing Gemini API key (VITE_GEMINI_API_KEY).');
+      return null;
+    }
+
+    const parts: any[] = [];
+
+    // Optional reference image conditioning
+    const ref = referenceImageDataUrl && referenceImageDataUrl.startsWith('data:image/')
+      ? this.parseDataUrl(referenceImageDataUrl)
+      : null;
+    if (ref) {
+      parts.push({ inlineData: { mimeType: ref.mimeType, data: this.cleanBase64(ref.data) } });
+    }
+
+    const userPrompt = String(prompt || '').trim();
+    const guidance =
+      'Generate a seamless, tileable texture for use in a real-time shader. ' +
+      'Avoid obvious borders/frames, keep details evenly distributed. ' +
+      'Return an IMAGE.';
+
+    parts.push({ text: userPrompt ? `${guidance}\n\nTEXTURE_BRIEF: ${userPrompt}` : guidance });
+
+    onLog?.(`Generating texture via ${this.imageModelId}...`);
+
+    const result = await ai.models.generateContent({
+      model: this.imageModelId,
+      contents: [{ role: 'user', parts }],
+      config: {
+        responseModalities: ['TEXT', 'IMAGE'],
+      },
+    } as any);
+
+    const candidate = (result as any)?.candidates?.[0] || (result as any)?.response?.candidates?.[0];
+    const responseParts: any[] = candidate?.content?.parts || [];
+
+    const text = responseParts
+      .filter((p: any) => p && p.text)
+      .map((p: any) => String(p.text))
+      .join('')
+      .trim();
+
+    const imagePart = responseParts.find((p: any) => p && p.inlineData && p.inlineData.data);
+    const mimeType = imagePart?.inlineData?.mimeType || 'image/png';
+    const data = imagePart?.inlineData?.data;
+
+    if (!data) {
+      onLog?.('Gemini did not return image data.');
+      return null;
+    }
+
+    const dataUrl = `data:${mimeType};base64,${data}`;
+    onLog?.('Texture generated.');
+    return { dataUrl, mimeType, ...(text ? { text } : {}) };
+  }
+
+  /**
+   * Edits an existing texture image using Gemini native image generation.
+   * Uses the provided sourceImageDataUrl as reference conditioning.
+   */
+  async editTextureDataUrl(
+    editPrompt: string,
+    sourceImageDataUrl: string,
+    onLog?: (msg: string) => void
+  ): Promise<{ dataUrl: string; mimeType: string; text?: string } | null> {
+    const ai = this.createClient();
+    if (!ai) {
+      onLog?.('Missing Gemini API key (VITE_GEMINI_API_KEY).');
+      return null;
+    }
+
+    const src = sourceImageDataUrl && sourceImageDataUrl.startsWith('data:image/')
+      ? this.parseDataUrl(sourceImageDataUrl)
+      : null;
+    if (!src) {
+      onLog?.('Edit failed: source image must be an image/* data URL.');
+      return null;
+    }
+
+    const prompt = String(editPrompt || '').trim();
+    if (!prompt) return null;
+
+    const parts: any[] = [
+      { inlineData: { mimeType: src.mimeType, data: this.cleanBase64(src.data) } },
+      {
+        text:
+          'Edit the provided texture image according to the instructions. ' +
+          'Preserve overall style and keep it seamless/tileable for use in a real-time shader. ' +
+          'Return an IMAGE.\n\nEDIT_INSTRUCTIONS: ' +
+          prompt,
+      },
+    ];
+
+    onLog?.(`Editing texture via ${this.imageModelId}...`);
+
+    const result = await ai.models.generateContent({
+      model: this.imageModelId,
+      contents: [{ role: 'user', parts }],
+      config: { responseModalities: ['TEXT', 'IMAGE'] },
+    } as any);
+
+    const candidate = (result as any)?.candidates?.[0] || (result as any)?.response?.candidates?.[0];
+    const responseParts: any[] = candidate?.content?.parts || [];
+
+    const text = responseParts
+      .filter((p: any) => p && p.text)
+      .map((p: any) => String(p.text))
+      .join('')
+      .trim();
+
+    const imagePart = responseParts.find((p: any) => p && p.inlineData && p.inlineData.data);
+    const mimeType = imagePart?.inlineData?.mimeType || 'image/png';
+    const data = imagePart?.inlineData?.data;
+
+    if (!data) {
+      onLog?.('Gemini did not return image data.');
+      return null;
+    }
+
+    const dataUrl = `data:${mimeType};base64,${data}`;
+    onLog?.('Texture edited.');
+    return { dataUrl, mimeType, ...(text ? { text } : {}) };
   }
 
   private safeJsonParse(text: string): any {
@@ -795,19 +1227,82 @@ export class GeminiService {
       const parts: any[] = [...mediaParts, { text: `User Prompt: ${prompt}` }];
 
       if (onLog) onLog('Thinking (Reasoning + Planning + Compiling)...');
+      if (onLog) onLog('[RSA] Mode Enabled: loops=1, candidates=3');
+
+      // RSA Loop Implementation
+      let currentCandidates: string[] = [];
+      const rsaCandidates = 3;
+
+      // Step 1: Generate Initial Candidates (Parallel)
+      if (onLog) onLog(`[RSA] Generating ${rsaCandidates} initial candidates...`);
+
+      const candidatePromises = Array(rsaCandidates).fill(0).map((_, i) =>
+        this.generateContentText(ai, {
+          model: this.modelId,
+          contents: parts, // Same prompt for all
+          systemInstruction: { parts: [{ text: systemInstruction }] },
+          config: {
+            responseMimeType: "application/json",
+            thinkingConfig: this.thinkingConfig,
+            temperature: 0.7 + (i * 0.1) // Varied temperature for diversity
+          }
+        }, (msg) => onLog ? onLog(`[Candidate ${i + 1}] ${msg}`) : null)
+      );
+
+      currentCandidates = await Promise.all(candidatePromises);
+      currentCandidates = currentCandidates.filter(c => c && c.length > 10); // Simple validation
+
+      if (currentCandidates.length === 0) {
+        throw new Error("RSA failed to generate any valid candidates.");
+      }
+
+      // Step 2: Aggregation (Single Loop for Latency/Quality Balance)
+      if (onLog) onLog(`[RSA] Aggregating ${currentCandidates.length} candidates into final solution...`);
+
+      // Using the official RSA aggregation prompt structure (adapted from HyperPotatoNeo/RSA/eval_loop.py)
+      const aggregationInstructions = currentCandidates.length === 1
+        ? [
+          `You are given a problem and a candidate solution.`,
+          `The candidate may be incomplete or contain errors.`,
+          `Refine this trajectory and produce an improved, higher-quality solution.`,
+          `If it is entirely wrong, attempt a new strategy.`,
+        ]
+        : [
+          `You are given a problem and several candidate solutions.`,
+          `Some candidates may be incorrect or contain errors.`,
+          `YOUR TASK: Aggregate the useful ideas ("best genes") and produce a single, high-quality solution.`,
+          `Reason carefully; if candidates disagree, choose the correct path. If all are incorrect, attempt a different strategy.`,
+        ];
+
+      const aggregationPrompt = [
+        ...aggregationInstructions,
+        `End with the complete final JSON.`,
+        ``,
+        `Problem:`,
+        `${prompt}`,
+        ``,
+        `Candidate solutions (may contain mistakes):`,
+        ...currentCandidates.map((c, i) => `---- Solution ${i + 1} ----\n${c}\n`),
+        ``,
+        `Now write a single improved solution. Provide clear reasoning and end with the final JSON.`,
+        `IMPORTANT: Output ONLY valid JSON code. No markdown fences.`
+      ].join('\n');
 
       const responseText = await this.generateContentText(ai, {
         model: this.modelId,
-        contents: parts, // Direct parts array as requested
+        contents: [...mediaParts, { text: aggregationPrompt }],
         systemInstruction: { parts: [{ text: systemInstruction }] },
         config: {
-          responseMimeType: 'application/json',
+          responseMimeType: "application/json",
           thinkingConfig: {
             thinkingLevel: ThinkingLevel.HIGH,
             includeThoughts: true
           },
         },
       }, onLog);
+
+      if (onLog) onLog(`[RSA] Aggregation complete. Response length: ${responseText?.length || 0}`);
+      if (onLog && responseText) onLog(`[RSA] Response preview: ${responseText.slice(0, 100).replace(/\n/g, ' ')}...`);
 
       const graphJson = this.safeJsonParse(responseText);
 
@@ -860,11 +1355,7 @@ export class GeminiService {
           config: {
             systemInstruction: { parts: [{ text: systemInstruction }] },
             responseMimeType: 'application/json',
-            thinkingConfig: {
-              // Lower thinking for correction to save time/tokens unless complex
-              thinkingLevel: ThinkingLevel.LOW,
-              includeThoughts: true
-            },
+            thinkingConfig: this.thinkingConfig,
           },
         }, onLog);
 

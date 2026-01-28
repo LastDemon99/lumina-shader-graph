@@ -399,6 +399,10 @@ class PreviewSystem {
         });
 
         // Two-Pass Rendering for correct Transparency on Convex objects (Sphere/Cube)
+        // Note: for blended materials we don't want to write to depth.
+        const prevDepthMask = gl.getParameter(gl.DEPTH_WRITEMASK);
+        gl.depthMask(false);
+
         // Pass 1: Draw Back Faces first so they are behind the Front faces
         gl.enable(gl.CULL_FACE);
         gl.cullFace(gl.FRONT); // Cull front faces -> Draw back faces
@@ -407,6 +411,8 @@ class PreviewSystem {
         // Pass 2: Draw Front Faces second so they blend on top of back faces
         gl.cullFace(gl.BACK); // Cull back faces -> Draw front faces
         gl.drawElements(gl.TRIANGLES, geo.count, gl.UNSIGNED_SHORT, 0);
+
+        gl.depthMask(!!prevDepthMask);
     }
 
     private bindAttribute(program: WebGLProgram, name: string, buffer: WebGLBuffer, size: number) {

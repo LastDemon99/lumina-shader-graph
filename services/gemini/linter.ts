@@ -1,6 +1,6 @@
-import { ShaderNode, Connection } from '../types';
-import { getNodeModule } from '../nodes';
-import { getEffectiveSockets } from '../nodes/runtime';
+import { ShaderNode, Connection } from '../../types';
+import { getNodeModule } from '../../nodes';
+import { getEffectiveSockets } from '../../nodes/runtime';
 
 export const lintGraph = (nodes: ShaderNode[], connections: Connection[]): string[] => {
   const report: string[] = [];

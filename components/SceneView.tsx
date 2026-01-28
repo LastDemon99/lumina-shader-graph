@@ -1,8 +1,8 @@
 
 import React, { useEffect, useRef, useState } from 'react';
 import { Box, Circle, Square, MousePointer2 } from 'lucide-react';
-import { mat4, createCube, createSphere, createPlane } from '../services/renderUtils';
-import { createWebGLContext, createProgram, createPlaceholderTexture, loadTexture, applyTextureParams } from '../services/webglUtils';
+import { mat4, createCube, createSphere, createPlane } from '../services/render/renderUtils';
+import { createWebGLContext, createProgram, createPlaceholderTexture, loadTexture, applyTextureParams } from '../services/render/webglUtils';
 
 interface TextureConfig {
     url: string;

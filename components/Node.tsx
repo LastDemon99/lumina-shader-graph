@@ -6,8 +6,8 @@
 import React, { useMemo, useRef, useState, useEffect } from 'react';
 import { ShaderNode, SocketType, Connection, GradientStop } from '../types';
 import { Preview } from './Preview';
-import { generateGLSL } from '../services/glslGenerator';
-import { processTextureFile, createTextureAtlas } from '../services/textureUtils';
+import { generateGLSL } from '../services/render/glslGenerator';
+import { processTextureFile, createTextureAtlas } from '../services/render/textureUtils';
 import { Upload, ArrowRight, Box, Square, CheckSquare, Square as SquareIcon, Image as ImageIcon, Loader2, Plus, X, ChevronDown, Check, ChevronUp, Layers, ChevronRight, Trash2, Circle, AppWindow } from 'lucide-react';
 import { getNodeModule } from '../nodes';
 import { getEffectiveSockets } from '../nodes/runtime';

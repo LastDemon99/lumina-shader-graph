@@ -1,6 +1,6 @@
 
 import React, { useEffect, useRef } from 'react';
-import { previewSystem } from '../services/previewSystem';
+import { previewSystem } from '../services/render/previewSystem';
 
 export const GlobalCanvas: React.FC = () => {
     const canvasRef = useRef<HTMLCanvasElement>(null);

@@ -1,5 +1,5 @@
-import { ShaderNode, Connection, NodeType, SocketType, GradientStop } from '../types';
-import { getNodeModule } from '../nodes';
+import { ShaderNode, Connection, NodeType, SocketType, GradientStop } from '../../types';
+import { getNodeModule } from '../../nodes';
 
 // In node previews we need to decide whether a vec3/vec4 represents a *data vector*
 // (normals/positions/etc. -> remap [-1,1] to [0,1]) or a *color* (show lit result).

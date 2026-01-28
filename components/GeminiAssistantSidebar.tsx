@@ -1,6 +1,14 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { Send, Paperclip, Mic, X, ChevronLeft, ChevronRight, Sparkles, Image as ImageIcon, Loader2, Play } from 'lucide-react';
 
+export interface SessionAsset {
+    id: string;
+    name: string;
+    dataUrl: string;
+    mimeType: string;
+    createdAt: number;
+}
+
 interface Message {
     id: string;
     role: 'user' | 'assistant' | 'system';
@@ -13,15 +21,27 @@ interface Message {
 }
 
 interface GeminiAssistantSidebarProps {
-    onGenerate: (prompt: string, attachment?: string) => void;
+    onGenerate: (
+        prompt: string,
+        attachment?: string,
+        chatContext?: Array<{ role: 'user' | 'assistant' | 'system'; content: string }>,
+        selectedAssetId?: string
+    ) => void;
     generationPhase: 'idle' | 'drafting' | 'linting' | 'refining';
     logs: string[];
+
+    assets: SessionAsset[];
+    onAddAsset: (dataUrl: string, suggestedName?: string) => void;
+    onUseAssetAsTextureNode: (assetId: string) => void;
 }
 
 export const GeminiAssistantSidebar: React.FC<GeminiAssistantSidebarProps> = ({
     onGenerate,
     generationPhase,
-    logs
+    logs,
+    assets,
+    onAddAsset,
+    onUseAssetAsTextureNode,
 }) => {
     const phaseLabel =
         generationPhase === 'drafting'
@@ -33,6 +53,7 @@ export const GeminiAssistantSidebar: React.FC<GeminiAssistantSidebarProps> = ({
                     : '';
 
     const [collapsed, setCollapsed] = useState(false);
+    const [activePanel, setActivePanel] = useState<'chat' | 'assets'>('chat');
     const [prompt, setPrompt] = useState('');
     const [messages, setMessages] = useState<Message[]>([
         {
@@ -93,8 +114,10 @@ export const GeminiAssistantSidebar: React.FC<GeminiAssistantSidebarProps> = ({
     }, [generationPhase, logs]);
 
     const [attachment, setAttachment] = useState<string | null>(null);
+    const [selectedAssetId, setSelectedAssetId] = useState<string | null>(null);
     const messagesEndRef = useRef<HTMLDivElement>(null);
     const fileInputRef = useRef<HTMLInputElement>(null);
+    const promptInputRef = useRef<HTMLTextAreaElement>(null);
 
     useEffect(() => {
         messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -166,10 +189,15 @@ export const GeminiAssistantSidebar: React.FC<GeminiAssistantSidebarProps> = ({
 
         setMessages(prev => [...prev, newMessage]);
 
-        onGenerate(finalPrompt, finalAttachment || undefined);
+        const chatContext = [...messages, newMessage]
+            .slice(-12)
+            .map(m => ({ role: m.role, content: m.content }));
+
+        onGenerate(finalPrompt, finalAttachment || undefined, chatContext, selectedAssetId || undefined);
 
         setPrompt('');
         setAttachment(null);
+        setSelectedAssetId(null);
     };
 
     const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -193,6 +221,24 @@ export const GeminiAssistantSidebar: React.FC<GeminiAssistantSidebarProps> = ({
     };
 
     const [isDragging, setIsDragging] = useState(false);
+
+    const primeChatWithAssetCommand = (asset: SessionAsset, commandPrefix: string) => {
+        setAttachment(asset.dataUrl);
+        setPrompt(commandPrefix);
+        setSelectedAssetId(asset.id);
+        setCollapsed(false);
+        setActivePanel('chat');
+
+        // Focus after panel switch renders
+        setTimeout(() => {
+            promptInputRef.current?.focus();
+            const el = promptInputRef.current;
+            if (el) {
+                const len = el.value.length;
+                el.setSelectionRange(len, len);
+            }
+        }, 0);
+    };
 
     const handleDragOver = (e: React.DragEvent) => {
         e.preventDefault();
@@ -220,16 +266,37 @@ export const GeminiAssistantSidebar: React.FC<GeminiAssistantSidebarProps> = ({
         }
     };
 
+    const addCurrentAttachmentAsAsset = () => {
+        if (!attachment) return;
+        if (!attachment.startsWith('data:image/')) {
+            alert('Only image attachments can be saved as texture assets.');
+            return;
+        }
+        onAddAsset(attachment);
+        setAttachment(null);
+        setCollapsed(false);
+        setActivePanel('assets');
+    };
+
     if (collapsed) {
         return (
             <div className="w-12 h-full bg-[#1e1e1e] border-r border-gray-800 flex flex-col items-center py-4 z-40 shrink-0 transition-all duration-300">
                 <button
-                    onClick={() => setCollapsed(false)}
+                    onClick={() => { setCollapsed(false); setActivePanel('chat'); }}
                     className="p-2 bg-indigo-600 rounded-lg text-white hover:bg-indigo-500 shadow-lg mb-4"
                     title="Open AI Assistant"
                 >
                     <Sparkles className="w-5 h-5" />
                 </button>
+
+                <button
+                    onClick={() => { setCollapsed(false); setActivePanel('assets'); }}
+                    className="p-2 bg-gray-800 rounded-lg text-gray-200 hover:bg-gray-700 shadow mb-4"
+                    title="Open Asset Library"
+                >
+                    <ImageIcon className="w-5 h-5" />
+                </button>
+
                 <div className="flex-1 w-[1px] bg-gray-800" />
             </div>
         );
@@ -244,11 +311,108 @@ export const GeminiAssistantSidebar: React.FC<GeminiAssistantSidebarProps> = ({
                     <span>AI Architect</span>
                     <span className="text-[10px] bg-indigo-900/50 text-indigo-300 px-1.5 py-0.5 rounded border border-indigo-700">Gemini 3</span>
                 </div>
-                <button onClick={() => setCollapsed(true)} className="text-gray-400 hover:text-white">
-                    <ChevronLeft className="w-4 h-4" />
-                </button>
+                <div className="flex items-center gap-2">
+                    <button
+                        onClick={() => setActivePanel('chat')}
+                        className={`text-xs px-2 py-1 rounded border ${activePanel === 'chat' ? 'border-indigo-600 bg-indigo-600/20 text-indigo-200' : 'border-gray-700 text-gray-300 hover:bg-gray-800'}`}
+                        title="Chat"
+                    >
+                        Chat
+                    </button>
+                    <button
+                        onClick={() => setActivePanel('assets')}
+                        className={`text-xs px-2 py-1 rounded border ${activePanel === 'assets' ? 'border-indigo-600 bg-indigo-600/20 text-indigo-200' : 'border-gray-700 text-gray-300 hover:bg-gray-800'}`}
+                        title="Asset Library"
+                    >
+                        Library
+                    </button>
+                    <button onClick={() => setCollapsed(true)} className="text-gray-400 hover:text-white" title="Collapse">
+                        <ChevronLeft className="w-4 h-4" />
+                    </button>
+                </div>
             </div>
 
+            {activePanel === 'assets' ? (
+                <div className="flex-1 overflow-y-auto p-4 space-y-3 scrollbar-thin scrollbar-thumb-gray-700">
+                    <div className="text-xs text-gray-300 border border-gray-700 rounded-lg p-3 bg-[#141414]">
+                        <div className="font-semibold text-gray-100 mb-1">Session Asset Library</div>
+                        <div className="text-gray-400">
+                            Assets are reusable texture sources saved for this session. Chat attachments are treated as reference by default.
+                        </div>
+                        <div className="mt-2 flex gap-2 flex-wrap">
+                            <label className="text-xs px-2 py-1 rounded border border-gray-700 text-gray-200 hover:bg-gray-800 cursor-pointer">
+                                Upload Image
+                                <input
+                                    type="file"
+                                    accept="image/*"
+                                    className="hidden"
+                                    onChange={(e) => {
+                                        const f = e.target.files?.[0];
+                                        if (!f) return;
+                                        const reader = new FileReader();
+                                        reader.onload = (evt) => {
+                                            const res = evt.target?.result;
+                                            if (typeof res === 'string') {
+                                                onAddAsset(res, f.name);
+                                            }
+                                        };
+                                        reader.readAsDataURL(f);
+                                    }}
+                                />
+                            </label>
+
+                            {attachment?.startsWith('data:image/') && (
+                                <button
+                                    onClick={addCurrentAttachmentAsAsset}
+                                    className="text-xs px-2 py-1 rounded border border-indigo-700 bg-indigo-700/20 text-indigo-200 hover:bg-indigo-700/30"
+                                    title="Save current chat attachment as an asset"
+                                >
+                                    Save Attached Image
+                                </button>
+                            )}
+                        </div>
+                    </div>
+
+                    {assets.length === 0 ? (
+                        <div className="text-sm text-gray-500">No assets yet. Use Upload Image or /addasset &lt;instructions&gt; with an attached image.</div>
+                    ) : (
+                        <div className="grid grid-cols-2 gap-3">
+                            {assets.slice().sort((a, b) => b.createdAt - a.createdAt).map(a => (
+                                <div key={a.id} className="border border-gray-700 rounded-lg overflow-hidden bg-[#111]">
+                                    <div className="aspect-square bg-black">
+                                        {a.dataUrl.startsWith('data:image/') ? (
+                                            <img src={a.dataUrl} alt={a.name} className="w-full h-full object-cover" />
+                                        ) : (
+                                            <div className="w-full h-full flex items-center justify-center text-gray-500 text-xs">Unsupported</div>
+                                        )}
+                                    </div>
+                                    <div className="p-2">
+                                        <div className="text-xs text-gray-100 font-semibold truncate" title={a.name}>{a.name}</div>
+                                        <div className="text-[10px] text-gray-500 truncate" title={a.mimeType}>{a.mimeType}</div>
+                                        <div className="mt-2 grid grid-cols-2 gap-2">
+                                            <button
+                                                className="w-full text-xs px-2 py-1 rounded bg-indigo-600 hover:bg-indigo-500 text-white"
+                                                onClick={() => primeChatWithAssetCommand(a, `/useasset `)}
+                                                title="Attach this asset and prep /useasset to apply it to the graph"
+                                            >
+                                                Use
+                                            </button>
+                                            <button
+                                                className="w-full text-xs px-2 py-1 rounded bg-gray-800 hover:bg-gray-700 text-gray-100 border border-gray-700"
+                                                onClick={() => primeChatWithAssetCommand(a, `/editasset `)}
+                                                title="Attach this asset and prep /editasset to edit it"
+                                            >
+                                                Edit
+                                            </button>
+                                        </div>
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+                    )}
+                </div>
+            ) : (
+                <>
             {/* Chat Area */}
             <div className="flex-1 overflow-y-auto p-4 space-y-4 scrollbar-thin scrollbar-thumb-gray-700">
                 {messages.map(msg => (
@@ -391,7 +555,7 @@ export const GeminiAssistantSidebar: React.FC<GeminiAssistantSidebarProps> = ({
                                     attachment.startsWith('http') ? 'YouTube Link detected' : 'File attached'}
                             </span>
                             <button
-                                onClick={() => setAttachment(null)}
+                                onClick={() => { setAttachment(null); setSelectedAssetId(null); }}
                                 className="p-1 rounded hover:bg-white/10"
                                 title="Remove attachment"
                                 disabled={generationPhase !== 'idle'}
@@ -402,6 +566,7 @@ export const GeminiAssistantSidebar: React.FC<GeminiAssistantSidebarProps> = ({
                     )}
 
                     <textarea
+                        ref={promptInputRef}
                         value={prompt}
                         onChange={(e) => setPrompt(e.target.value)}
                         onKeyDown={handleKeyDown}
@@ -452,6 +617,8 @@ export const GeminiAssistantSidebar: React.FC<GeminiAssistantSidebarProps> = ({
                     </button>
                 </div>
             </div>
+                </>
+            )}
         </div>
     );
 };

@@ -1,6 +1,6 @@
 
 import React, { useEffect, useLayoutEffect, useRef } from 'react';
-import { previewSystem } from '../services/previewSystem';
+import { previewSystem } from '../services/render/previewSystem';
 import { AlertTriangle } from 'lucide-react';
 
 interface PreviewProps {

@@ -46,4 +46,3 @@ Root object must be: `{ "nodes": [...], "connections": [...] }`.
 # AVAILABLE_NODES (AUTHORITY)
 
 {{AVAILABLE_NODES}}
-

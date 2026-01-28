@@ -4,15 +4,16 @@ import { Node } from './components/Node';
 import { Preview } from './components/Preview';
 import { SceneView } from './components/SceneView';
 import { GlobalCanvas } from './components/GlobalCanvas'; // Import Global Canvas
-import { GeminiAssistantSidebar } from './components/GeminiAssistantSidebar';
-import { generateFragmentShader, generateVertexShader } from './services/glslGenerator';
-import { geminiService } from './services/geminiService';
-import { lintGraph } from './services/linter';
+import { GeminiAssistantSidebar, SessionAsset } from './components/GeminiAssistantSidebar';
+import { generateFragmentShader, generateVertexShader } from './services/render/glslGenerator';
+import { geminiService } from './services/gemini/geminiService';
+import { lintGraph } from './services/gemini/linter';
 import { ShaderNode, Connection, Viewport, NodeType, SocketType } from './types';
 import { INITIAL_NODES, INITIAL_CONNECTIONS } from './initialGraph';
 import { NODE_LIST, getNodeModule } from './nodes';
 import { getEffectiveSockets } from './nodes/runtime';
-import { previewSystem } from './services/previewSystem';
+import { previewSystem } from './services/render/previewSystem';
+import { dispatchCommand } from './services/gemini/commands/dispatch';
 import { Wand2, Download, Upload, ZoomIn, ZoomOut, MousePointer2, Box, Square, Save, Layers, Network, CheckCircle2, Loader2, Sparkles, FileJson, AlertCircle, Plus, FilePlus, Circle, AppWindow } from 'lucide-react';
 
 const App: React.FC = () => {
@@ -68,7 +69,7 @@ const App: React.FC = () => {
   const [lastPan, setLastPan] = useState({ x: 0, y: 0 });
 
   // Context Menu State
-  const [contextMenu, setContextMenu] = useState<{ x: number, y: number, open: boolean } | null>(null);
+  const [contextMenu, setContextMenu] = useState<{ x: number, y: number, clientX: number, clientY: number, open: boolean } | null>(null);
   const [contextSearch, setContextSearch] = useState('');
 
 
@@ -76,6 +77,178 @@ const App: React.FC = () => {
   // AI Status State
   const [generationPhase, setGenerationPhase] = useState<'idle' | 'drafting' | 'linting' | 'refining'>('idle');
   const [linterLogs, setLinterLogs] = useState<string[]>([]);
+
+  // Session Asset Library (in-memory)
+  const [sessionAssets, setSessionAssets] = useState<SessionAsset[]>([]);
+
+  const addSessionAsset = useCallback((dataUrl: string, suggestedName?: string) => {
+    const s = String(dataUrl || '');
+    if (!s.startsWith('data:image/')) {
+      setLinterLogs(prev => [...prev, 'Asset add failed: only data:image/* is supported right now.']);
+      return;
+    }
+
+    const mimeMatch = s.match(/^data:([^;]+);base64,/);
+    const mimeType = mimeMatch ? mimeMatch[1] : 'image/png';
+    const nameBase = String(suggestedName || '').trim();
+    const name = nameBase || `asset-${sessionAssets.length + 1}`;
+
+    const id = `asset-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+    setSessionAssets(prev => [...prev, { id, name, dataUrl: s, mimeType, createdAt: Date.now() }]);
+    setLinterLogs(prev => [...prev, `Asset saved: ${name}`]);
+  }, [sessionAssets.length]);
+
+  const insertTextureAssetNodeFromAsset = useCallback((assetId: string) => {
+    const asset = sessionAssets.find(a => a.id === assetId);
+    if (!asset) return;
+
+    const outNode = nodes.find(n => n.id === 'output') || nodes.find(n => n.type === 'output');
+    const baseX = (outNode?.x ?? 600) - 520;
+    const baseY = (outNode?.y ?? 180) + 140;
+
+    const id = `texture2DAsset-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+    const texMod = getNodeModule('texture2DAsset');
+    const textureNode: ShaderNode = {
+      id,
+      ...getDefinitionOrPlaceholder('texture2DAsset'),
+      x: baseX,
+      y: baseY,
+      data: {
+        ...(texMod?.initialData ? (texMod.initialData(id) as any) : {}),
+        textureAsset: asset.dataUrl,
+      },
+    };
+
+    setNodes(prev => [...prev, textureNode]);
+    setSelectedNodeIds(new Set([id]));
+    setLinterLogs(prev => [...prev, `Inserted texture node from asset: ${asset.name}`]);
+  }, [nodes, sessionAssets, getDefinitionOrPlaceholder]);
+
+  const applyTextureDataUrlToTarget = useCallback((opts: {
+    dataUrl: string;
+    mimeType: string;
+    targetNodeId: string;
+    targetSocketId: string;
+    operation: 'multiply' | 'replace';
+    channel: 'rgba' | 'rgb' | 'r' | 'g' | 'b' | 'a';
+    log?: (msg: string) => void;
+  }) => {
+    const handleLog = opts.log || (() => { });
+    const makeId = (type: string) => `${type}-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`;
+    const mkConn = (sourceNodeId: string, sourceSocketId: string, targetNodeId: string, targetSocketId: string): Connection => ({
+      id: `conn-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`,
+      sourceNodeId,
+      sourceSocketId,
+      targetNodeId,
+      targetSocketId,
+    });
+
+    const targetNodeId = opts.targetNodeId || 'output';
+    const targetSocketId = opts.targetSocketId || 'color';
+    const operation = opts.operation || 'multiply';
+    const channel = opts.channel || 'rgba';
+
+    // Place nodes near the output node if present.
+    const outNode = nodes.find(n => n.id === 'output') || nodes.find(n => n.type === 'output');
+    const baseX = (outNode?.x ?? 600) - 600;
+    const baseY = (outNode?.y ?? 180) - 80;
+
+    const texId = makeId('texture2DAsset');
+    const texMod = getNodeModule('texture2DAsset');
+    const textureNode: ShaderNode = {
+      id: texId,
+      ...getDefinitionOrPlaceholder('texture2DAsset'),
+      x: baseX,
+      y: baseY,
+      data: {
+        ...(texMod?.initialData ? (texMod.initialData(texId) as any) : {}),
+        textureAsset: opts.dataUrl,
+      },
+    };
+
+    const newNodes: ShaderNode[] = [textureNode];
+    const newConns: Connection[] = [];
+
+    // Remove existing connection into the target socket (we will replace it)
+    const existingTargetConn = connections.find(c => c.targetNodeId === targetNodeId && c.targetSocketId === targetSocketId);
+    const nextConnectionsBase = existingTargetConn
+      ? connections.filter(c => c.id !== existingTargetConn.id)
+      : connections;
+
+    const isFloatTarget = ['alpha', 'specular', 'smoothness', 'occlusion'].includes(targetSocketId);
+    const isNormalTarget = targetSocketId === 'normal';
+
+    const getTextureSourceForTarget = (): { sourceNodeId: string; sourceSocketId: string } => {
+      if (isNormalTarget) {
+        const nId = makeId('normalUnpack');
+        const nMod = getNodeModule('normalUnpack');
+        newNodes.push({
+          id: nId,
+          ...getDefinitionOrPlaceholder('normalUnpack'),
+          x: baseX + 240,
+          y: baseY + 140,
+          data: {
+            ...(nMod?.initialData ? (nMod.initialData(nId) as any) : {}),
+            space: 'Tangent',
+          },
+        });
+        newConns.push(mkConn(texId, 'out', nId, 'in'));
+        return { sourceNodeId: nId, sourceSocketId: 'out' };
+      }
+
+      if (isFloatTarget || channel === 'r' || channel === 'g' || channel === 'b' || channel === 'a') {
+        const sId = makeId('split');
+        const sMod = getNodeModule('split');
+        newNodes.push({
+          id: sId,
+          ...getDefinitionOrPlaceholder('split'),
+          x: baseX + 240,
+          y: baseY + 10,
+          data: {
+            ...(sMod?.initialData ? (sMod.initialData(sId) as any) : {}),
+          },
+        });
+        newConns.push(mkConn(texId, 'out', sId, 'in'));
+
+        const ch = (channel === 'r' || channel === 'g' || channel === 'b' || channel === 'a')
+          ? channel
+          : (targetSocketId === 'alpha' ? 'a' : 'r');
+
+        return { sourceNodeId: sId, sourceSocketId: ch };
+      }
+
+      return { sourceNodeId: texId, sourceSocketId: 'out' };
+    };
+
+    const texSource = getTextureSourceForTarget();
+
+    if (operation === 'multiply') {
+      const mulId = makeId('multiply');
+      const mulMod = getNodeModule('multiply');
+      newNodes.push({
+        id: mulId,
+        ...getDefinitionOrPlaceholder('multiply'),
+        x: baseX + 480,
+        y: baseY + (isNormalTarget ? 140 : 10),
+        data: {
+          ...(mulMod?.initialData ? (mulMod.initialData(mulId) as any) : {}),
+        },
+      });
+
+      if (existingTargetConn) {
+        newConns.push(mkConn(existingTargetConn.sourceNodeId, existingTargetConn.sourceSocketId, mulId, 'a'));
+      }
+      newConns.push(mkConn(texSource.sourceNodeId, texSource.sourceSocketId, mulId, 'b'));
+      newConns.push(mkConn(mulId, 'out', targetNodeId, targetSocketId));
+    } else {
+      newConns.push(mkConn(texSource.sourceNodeId, texSource.sourceSocketId, targetNodeId, targetSocketId));
+    }
+
+    setNodes(prev => [...prev, ...newNodes]);
+    setConnections([...nextConnectionsBase, ...newConns]);
+
+    handleLog(`Applied texture to ${targetNodeId}.${targetSocketId} (${operation}, channel=${channel}).`);
+  }, [connections, getDefinitionOrPlaceholder, nodes]);
 
   // File System State
   const [fileHandle, setFileHandle] = useState<any>(null); // Type 'any' to avoid TS errors with modern API in strict mode
@@ -467,7 +640,18 @@ const App: React.FC = () => {
     if (activeTab !== 'graph') return;
     e.preventDefault();
     setContextSearch('');
-    setContextMenu({ x: e.clientX, y: e.clientY, open: true });
+    const rect = canvasRef.current?.getBoundingClientRect();
+    if (rect) {
+      setContextMenu({
+        x: e.clientX - rect.left,
+        y: e.clientY - rect.top,
+        clientX: e.clientX,
+        clientY: e.clientY,
+        open: true,
+      });
+    } else {
+      setContextMenu({ x: e.clientX, y: e.clientY, clientX: e.clientX, clientY: e.clientY, open: true });
+    }
   };
 
   const handleMouseMove = (e: React.MouseEvent) => {
@@ -572,6 +756,13 @@ const App: React.FC = () => {
   const handleSocketMouseDown = (e: React.MouseEvent, nodeId: string, socketId: string, isInput: boolean, type: SocketType) => {
     e.stopPropagation();
     e.preventDefault();
+    // Ensure draft connection end follows cursor immediately (even before first mousemove)
+    const rect = canvasRef.current?.getBoundingClientRect();
+    if (rect) {
+      setMousePos({ x: e.clientX - rect.left, y: e.clientY - rect.top });
+    } else {
+      setMousePos({ x: e.clientX, y: e.clientY });
+    }
     setConnecting({ nodeId, socketId, isInput, type, x: e.clientX, y: e.clientY });
   };
 
@@ -730,15 +921,6 @@ const App: React.FC = () => {
     return { x: node.x + (isInput ? -9 : 169), y: node.y + 50 };
   };
 
-  const formatClarificationHistory = (history: ShaderClarificationHistoryItem[]): string => {
-    const lines: string[] = ['CLARIFICATIONS:'];
-    history.forEach(item => {
-      if (!item?.label) return;
-      lines.push(`- ${item.label}: ${item.answer}`);
-    });
-    return lines.join('\n');
-  };
-
   const runGeminiPipeline = async (prompt: string, attachment?: string) => {
     if (!prompt && !attachment) return;
 
@@ -778,7 +960,8 @@ const App: React.FC = () => {
 
       if (isAnimated) {
         // Capture 5 frames over 2 seconds for motion analysis
-        return previewSystem.captureSequence(nodeId, 2.0, 2.5);
+        const frames = await previewSystem.captureSequence(nodeId, 2.0, 2.5);
+        return frames[frames.length - 1] || null;
       } else {
         return previewSystem.capturePreview(nodeId);
       }
@@ -864,8 +1047,87 @@ const App: React.FC = () => {
     setGenerationPhase('idle');
   };
 
-  const handleGeminiGenerate = async (prompt: string, attachment?: string) => {
+  const runGeminiTexturePipeline = async (texturePrompt: string, referenceAttachment?: string) => {
+    const cleanPrompt = String(texturePrompt || '').trim();
+    if (!cleanPrompt && !referenceAttachment) return;
+
+    setGenerationPhase('drafting');
+    setLinterLogs(['Inferring texture intent...']);
+
+    const handleLog = (msg: string) => setLinterLogs(prev => [...prev, msg]);
+
+    try {
+      const inferred = await geminiService.inferTextureRequest(cleanPrompt, handleLog);
+      const imagePrompt = inferred?.imagePrompt || cleanPrompt;
+      const targetNodeId = inferred?.target?.nodeId || 'output';
+      const targetSocketId = inferred?.target?.socketId || 'color';
+      const operation = inferred?.operation || 'multiply';
+      const channel = inferred?.channel || 'rgba';
+
+      handleLog(`Target: ${targetNodeId}.${targetSocketId} (${operation}, channel=${channel})`);
+
+      setLinterLogs(prev => [...prev, 'Generating texture...']);
+      const generated = await geminiService.generateTextureDataUrl(imagePrompt, referenceAttachment, handleLog);
+      if (!generated?.dataUrl) {
+        handleLog('Texture generation failed.');
+        setGenerationPhase('idle');
+        return;
+      }
+
+      // Auto-save generated texture into the session library
+      setSessionAssets(prev => {
+        const id = `asset-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+        const name = `gen-texture-${new Date().toISOString().replace(/[:.]/g, '-')}`;
+        return [...prev, { id, name, dataUrl: generated.dataUrl, mimeType: generated.mimeType, createdAt: Date.now() }];
+      });
+
+      applyTextureDataUrlToTarget({
+        dataUrl: generated.dataUrl,
+        mimeType: generated.mimeType,
+        targetNodeId,
+        targetSocketId,
+        operation,
+        channel,
+        log: handleLog,
+      });
+    } catch (e: any) {
+      console.error(e);
+      setLinterLogs(prev => [...prev, `Texture pipeline error: ${e?.message || String(e)}`]);
+    } finally {
+      setGenerationPhase('idle');
+    }
+  };
+
+  const handleGeminiGenerate = async (
+    prompt: string,
+    attachment?: string,
+    chatContext?: Array<{ role: 'user' | 'assistant' | 'system'; content: string }>
+    ,
+    selectedAssetId?: string
+  ) => {
     if (!prompt && !attachment) return;
+
+    const handled = await dispatchCommand(
+      { prompt, attachment, chatContext, selectedAssetId },
+      {
+        geminiService,
+        nodes,
+        connections,
+        sessionAssets,
+        setNodes,
+        setConnections,
+        setSessionAssets,
+        setGenerationPhase,
+        setLinterLogs,
+        addSessionAsset,
+        applyTextureDataUrlToTarget,
+        runGeminiTexturePipeline,
+        runGeminiPipeline,
+      }
+    );
+
+    if (handled) return;
+
     await runGeminiPipeline(prompt, attachment);
   };
 
@@ -942,6 +1204,9 @@ const App: React.FC = () => {
           onGenerate={handleGeminiGenerate}
           generationPhase={generationPhase}
           logs={linterLogs}
+          assets={sessionAssets}
+          onAddAsset={addSessionAsset}
+          onUseAssetAsTextureNode={insertTextureAssetNodeFromAsset}
         />
 
         <div className={`flex-1 h-full relative flex flex-col ${activeTab === 'graph' ? 'z-10' : 'z-0 invisible'}`}>
@@ -1059,7 +1324,7 @@ const App: React.FC = () => {
                     contextFilteredNodes.map(type => (
                       <button
                         key={type}
-                        onClick={() => addNode(type as NodeType, contextMenu.x, contextMenu.y)}
+                        onClick={() => addNode(type as NodeType, contextMenu.clientX, contextMenu.clientY)}
                         className="w-full text-left px-3 py-1.5 text-xs text-gray-300 hover:bg-blue-600 hover:text-white transition-colors"
                       >
                         {(getDefinitionOrPlaceholder(type) as any).label}
