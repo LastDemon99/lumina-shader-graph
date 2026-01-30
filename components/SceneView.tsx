@@ -289,8 +289,9 @@ export const SceneView: React.FC<SceneViewProps> = ({
                 if (autoRotate) {
                     mat4.rotateY(model, model, time * 0.001);
                 } else {
-                    mat4.rotateX(model, model, rotation.y);
+                    // Turntable rotation: Y (world) then X (local)
                     mat4.rotateY(model, model, rotation.x);
+                    mat4.rotateX(model, model, rotation.y);
                 }
             }
 

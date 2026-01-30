@@ -292,8 +292,9 @@ class PreviewSystem {
             mat4.identity(model);
             const rotX = item.rotation?.x ?? 0.5;
             const rotY = item.rotation?.y ?? 0.5;
-            mat4.rotateX(model, model, rotX);
+            // Turntable rotation: Y (world) then X (local)
             mat4.rotateY(model, model, rotY);
+            mat4.rotateX(model, model, rotX);
         } else {
             mat4.identity(projection);
             mat4.identity(view);

@@ -108,6 +108,7 @@ export const Preview: React.FC<PreviewProps> = ({
 
   const handleMouseDown = (e: React.MouseEvent) => {
     if (mode !== '3d') return; // Only rotate 3D previews
+    e.stopPropagation(); // Prevent node dragging when rotating preview
     isDragging.current = true;
     lastMousePos.current = { x: e.clientX, y: e.clientY };
 
