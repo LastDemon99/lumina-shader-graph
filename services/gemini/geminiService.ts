@@ -1,65 +1,403 @@
 
-import { GoogleGenAI, Type, Schema, ThinkingLevel } from "@google/genai";
+import { GoogleGenAI, ThinkingLevel } from "@google/genai";
 import { ShaderNode, Connection } from "../../types";
 import { ALL_NODE_TYPES, getNodeModule } from "../../nodes";
-import { getEffectiveSockets, getFallbackSocketId } from "../../nodes/runtime";
 import { lintGraph } from "./linter";
 import architectInstructions from "./agent-instructions/shader-architect.md?raw";
 import refinerInstructions from "./agent-instructions/shader-refiner.md?raw";
+import editorInstructions from "./agent-instructions/shader-editor.md?raw";
+import consultantInstructions from "./agent-instructions/shader-consultant.md?raw";
+import * as utils from "./utils";
 
 export class GeminiService {
-  private modelId = 'gemini-2.5-flash'; // (2.5 temporal for test) 'gemini-3-flash-preview';
+  private modelId = 'gemini-3-flash-preview';
+  private imageModelId = 'gemini-2.5-flash-image'; // (2.5 temporal for test) 'gemini-3-pro-image-preview';
 
-  // Native image generation model ("Nano Banana"-style). Override via env.
-  private imageModelId =
-    (import.meta as any).env?.VITE_GEMINI_IMAGE_MODEL ||
-    import.meta.env.VITE_GEMINI_IMAGE_MODEL ||
-    'gemini-2.5-flash-image'; // (2.5 temporal for test) 'gemini-3-pro-image-preview';
+  private persistentEditorChat: any | null = null;
+  private persistentEditorChatConfigKey: string | null = null;
+  private persistentConsultantChat: any | null = null;
+  private persistentConsultantChatConfigKey: string | null = null;
+  private persistentBaselineGraph: { nodes: any[]; connections: any[] } | null = null;
 
   private thinkingConfig = {
-    thinkingLevel: ThinkingLevel.LOW,
+    thinkingLevel: ThinkingLevel.HIGH,
     includeThoughts: true
   };
 
-  private injectPlaceholders(template: string, values: Record<string, string>): string {
-    let out = String(template || '');
-    for (const [key, value] of Object.entries(values || {})) {
-      out = out.split(`{{${key}}}`).join(String(value ?? ''));
+  private baseConfig: any = {
+    responseMimeType: 'application/json',
+    thinkingConfig: this.thinkingConfig,
+  };
+
+  private enableLog: boolean = true;
+
+  private cacheTtlSeconds: number = 21600; // 6h default
+
+  private async getOrCreateCachedPrefix(
+    ai: GoogleGenAI,
+    cacheKey: string,
+    systemInstructionText: string,
+    onLog?: (msg: string) => void
+  ): Promise<string | null> {
+    const storage = utils.getCacheStorage();
+    const storageKey = `lumina.gemini.cachedContent:${cacheKey}`;
+    const existing = storage?.getItem(storageKey);
+    if (existing) return existing;
+
+    try {
+      const created = await ai.caches.create({
+        model: this.modelId,
+        config: {
+          displayName: `lumina-shader-graph:${cacheKey}`,
+          ttl: `${this.cacheTtlSeconds}s`,
+          systemInstruction: { parts: [{ text: systemInstructionText }] },
+        },
+      } as any);
+
+      const name = (created as any)?.name;
+      if (name && storage) storage.setItem(storageKey, String(name));
+
+      const usage = (created as any)?.usageMetadata;
+      if (name && onLog) {
+        onLog(`Cache: created prefix (${cacheKey}).` + (usage ? ` Tokens: ${usage.totalTokenCount}` : ''));
+      }
+      return name || null;
+    } catch (e: any) {
+      onLog?.(`Cache: create failed (${cacheKey}). Continuing without cache. (${e?.message || String(e)})`);
+      return null;
     }
-    return out;
   }
 
-  private buildSystemInstruction(softwareContext: string): string {
-    const base = String(architectInstructions || '');
-    if (base.includes('{{SOFTWARE_CONTEXT}}')) {
-      return this.injectPlaceholders(base, { SOFTWARE_CONTEXT: softwareContext });
-    }
-    return `${base}\n\n${softwareContext}`;
+  private logUsageMetadata(result: any, onLog?: (msg: string) => void) {
+    if (!onLog || !this.enableLog) return;
+    const usage = (result as any)?.usageMetadata || (result as any)?.response?.usageMetadata;
+    if (!usage) return;
+
+    const prompt = usage.promptTokenCount;
+    const out = usage.candidatesTokenCount;
+    const total = usage.totalTokenCount;
+    const cached = usage.cachedContentTokenCount || 0;
+    onLog(
+      `Usage: prompt=${prompt ?? '?'} out=${out ?? '?'} total=${total ?? '?'} cachedPrefix=${cached}`
+    );
   }
 
-  private buildRefineSystemInstruction(): string {
+  private async sendChatMessageText(
+    chat: any,
+    message: any,
+    onLog?: (msg: string) => void,
+    config?: any
+  ): Promise<string> {
+    const result = await chat.sendMessage({ message, ...(config ? { config } : {}) } as any);
+    this.logUsageMetadata(result, onLog);
+    return this.processResponse(result, onLog);
+  }
+
+  private async createGraphChat(
+    ai: GoogleGenAI,
+    agent: 'architect' | 'editor' | 'consultant',
+    systemInstruction: string,
+    onLog?: (msg: string) => void,
+    history?: any[]
+  ): Promise<any> {
+    const cachedContent = await this.getOrCreateCachedPrefix(
+      ai,
+      `${agent}:${this.modelId}:${utils.fnv1aHex(systemInstruction)}`,
+      systemInstruction,
+      onLog
+    );
+
+    const chatConfig = cachedContent
+      ? { ...this.baseConfig, cachedContent }
+      : { ...this.baseConfig, systemInstruction: { parts: [{ text: systemInstruction }] } };
+
+    return (ai as any).chats.create({
+      model: this.modelId,
+      config: chatConfig,
+      ...(Array.isArray(history) && history.length > 0 ? { history } : {}),
+    } as any);
+  }
+
+  resetPersistentGraphSession() {
+    this.persistentEditorChat = null;
+    this.persistentEditorChatConfigKey = null;
+    this.persistentConsultantChat = null;
+    this.persistentConsultantChatConfigKey = null;
+  }
+
+  setPersistentGraphBaseline(nodes: ShaderNode[], connections: Connection[]) {
+    this.persistentBaselineGraph = utils.toMinimalGraphSnapshot(nodes, connections);
+  }
+
+  private getBaselineHistorySeed(): any[] {
+    if (!this.persistentBaselineGraph) return [];
+    return [
+      {
+        role: 'model',
+        parts: [
+          {
+            text:
+              'GRAPH_BASELINE_JSON (authoritative starting point for subsequent ops):\n' +
+              JSON.stringify(this.persistentBaselineGraph),
+          },
+        ],
+      },
+    ];
+  }
+
+  private async getOrCreatePersistentEditorChat(
+    ai: GoogleGenAI,
+    systemInstruction: string,
+    onLog?: (msg: string) => void
+  ): Promise<any> {
+    const configKey = `${this.modelId}:editor:cache:${utils.fnv1aHex(systemInstruction)}`;
+    if (this.persistentEditorChat && this.persistentEditorChatConfigKey === configKey) {
+      return this.persistentEditorChat;
+    }
+    const seededHistory = this.getBaselineHistorySeed();
+    const chat = await this.createGraphChat(ai, 'editor', systemInstruction, onLog, seededHistory);
+    this.persistentEditorChat = chat;
+    this.persistentEditorChatConfigKey = configKey;
+    onLog?.('Chat: created persistent editor session.');
+    return chat;
+  }
+
+  async appendManualGraphOpsToPersistentHistory(
+    ops: any[],
+    onLog?: (msg: string) => void
+  ): Promise<void> {
+    if (!Array.isArray(ops) || ops.length === 0) return;
+
+    const ai = this.createClient();
+    if (!ai) return;
+
+    // Keep local baseline in sync.
+    if (this.persistentBaselineGraph) {
+      try {
+        this.persistentBaselineGraph = utils.applyGraphOps(this.persistentBaselineGraph, ops, onLog);
+      } catch {
+        // ignore
+      }
+    }
+
+    const softwareContext = this.buildStableSoftwareContext('editor');
+    const systemInstruction = this.buildSystemInstruction('editor', softwareContext);
+    const chat = await this.getOrCreatePersistentEditorChat(ai, systemInstruction, onLog);
+
+    const getHistoryFn = (chat as any)?.getHistory;
+    if (typeof getHistoryFn !== 'function') {
+      onLog?.('Chat: getHistory() not available; skipping manual ops history injection.');
+      return;
+    }
+
+    try {
+      const history = await getHistoryFn.call(chat);
+      const nextHistory = Array.isArray(history) ? [...history] : [];
+      nextHistory.push({
+        role: 'system',
+        parts: [{ text: `MANUAL_GRAPH_OPS (apply on top of baseline):\n${JSON.stringify(ops)}` }],
+      });
+
+      // Recreate the chat with the updated history.
+      this.persistentEditorChat = await this.createGraphChat(ai, 'editor', systemInstruction, onLog, nextHistory);
+      this.persistentEditorChatConfigKey = `${this.modelId}:editor:cache:${utils.fnv1aHex(systemInstruction)}`;
+      onLog?.(`Chat: injected ${ops.length} manual op(s) into persistent history.`);
+
+      // Sync with Consultant
+      this.notifyConsultantOfGraphChange('User (Manual Edit)', `${ops.length} nodes/connections were modified manually in the UI.`).catch(err => {
+        console.error('[Sync] Consultant sync failed:', err);
+      });
+    } catch (e: any) {
+      onLog?.(`Chat: failed to inject manual ops into history (${e?.message || String(e)}).`);
+    }
+  }
+
+  private buildSystemInstruction(agent: 'architect' | 'editor' | 'consultant', softwareContext: string): string {
+    const base = agent === 'editor' ? editorInstructions : agent === 'consultant' ? consultantInstructions : architectInstructions;
+    const template = String(base || '');
+    if (template.includes('{{SOFTWARE_CONTEXT}}')) {
+      return utils.injectPlaceholders(template, { SOFTWARE_CONTEXT: softwareContext });
+    }
+    return `${template}\n\n${softwareContext}`;
+  }
+
+  private async getOrCreatePersistentConsultantChat(
+    ai: GoogleGenAI,
+    systemInstruction: string,
+    onLog?: (msg: string) => void
+  ): Promise<any> {
+    const configKey = `${this.modelId}:consultant:cache:${utils.fnv1aHex(systemInstruction)}`;
+    if (this.persistentConsultantChat && this.persistentConsultantChatConfigKey === configKey) {
+      return this.persistentConsultantChat;
+    }
+    const chat = await this.createGraphChat(ai, 'consultant', systemInstruction, onLog, []);
+    this.persistentConsultantChat = chat;
+    this.persistentConsultantChatConfigKey = configKey;
+    onLog?.('Chat: created persistent consultant session.');
+    return chat;
+  }
+
+  async notifyConsultantOfGraphChange(
+    agentName: string,
+    changeDescription: string,
+    onLog?: (msg: string) => void
+  ): Promise<void> {
+    const ai = this.createClient();
+    if (!ai) return;
+
+    const softwareContext = `AVAILABLE_NODES:\n${this.definitions}\n\nSCOPE: Lumina Shader Graph (WebGL 1.0).`;
+    const systemInstruction = this.buildSystemInstruction('consultant', softwareContext);
+    const chat = await this.getOrCreatePersistentConsultantChat(ai, systemInstruction, onLog);
+
+    try {
+      // We inject a special system context message to the model
+      const message = {
+        role: 'system',
+        parts: [{ text: `GRAPH_UPDATE_NOTICE from ${agentName}: ${changeDescription}` }]
+      };
+
+      const getHistoryFn = (chat as any)?.getHistory;
+      if (typeof getHistoryFn === 'function') {
+        const history = await getHistoryFn.call(chat);
+        const nextHistory = Array.isArray(history) ? [...history] : [];
+        nextHistory.push(message);
+
+        // Recreate the chat with the updated history.
+        this.persistentConsultantChat = await this.createGraphChat(ai, 'consultant', systemInstruction, onLog, nextHistory);
+        this.persistentConsultantChatConfigKey = `${this.modelId}:consultant:cache:${utils.fnv1aHex(systemInstruction)}`;
+        onLog?.(`Chat: Consultant informed of changes by ${agentName}.`);
+      }
+    } catch (e: any) {
+      onLog?.(`Chat: failed to inform consultant of changes (${e?.message || String(e)}).`);
+    }
+  }
+
+  async askQuestion(
+    prompt: string,
+    currentNodes?: ShaderNode[],
+    currentConnections?: Connection[],
+    attachedNodes?: Array<{ id: string; label: string; type: string }>,
+    onLog?: (msg: string) => void
+  ): Promise<string | null> {
+    const ai = this.createClient();
+    if (!ai) return null;
+
+    if (onLog) onLog("Lumina Shader Expert initialized...");
+
+    // Build dynamic context about the current graph
+    let dynamicGraphContext = '';
+    if (currentNodes && currentNodes.length > 0) {
+      dynamicGraphContext = `\n\nCURRENT_GRAPH_SNAPSHOT:\n${JSON.stringify(utils.toMinimalGraphSnapshot(currentNodes, currentConnections || []))}`;
+    }
+
+    if (attachedNodes && attachedNodes.length > 0) {
+      dynamicGraphContext += `\n\nATTACHED_NODES_CONTEXT (The user explicitly selected these nodes for your attention):\n${JSON.stringify(attachedNodes)}`;
+    }
+
+    // We provide available nodes as context
+    const softwareContext = `AVAILABLE_NODES:\n${this.definitions}\n\nSCOPE: Lumina Shader Graph (WebGL 1.0).${dynamicGraphContext}`;
+    const systemInstruction = this.buildSystemInstruction('consultant', softwareContext);
+    const chat = await this.getOrCreatePersistentConsultantChat(ai, systemInstruction, onLog);
+
+    try {
+      const responseText = await this.sendChatMessageText(chat, { text: prompt }, onLog, {
+        includeThoughts: true,
+        thinkingConfig: this.thinkingConfig,
+      });
+
+      return responseText;
+    } catch (e: any) {
+      if (onLog) onLog(`Consultant failed: ${e?.message || String(e)}`);
+      return null;
+    }
+  }
+
+  private buildRefineSystemInstruction(agent: 'architect' | 'editor'): string {
     const base = String(refinerInstructions || '');
     const available = `AVAILABLE_NODES:\n${this.definitions}`;
-    if (base.includes('{{AVAILABLE_NODES}}')) {
-      return this.injectPlaceholders(base, { AVAILABLE_NODES: available });
+    const placeholders = { AVAILABLE_NODES: available };
+
+    let out = base.includes('{{AVAILABLE_NODES}}')
+      ? utils.injectPlaceholders(base, placeholders)
+      : `${base}\n\n${available}`;
+
+    return out + `\n\nAGENT: ${agent}\n` +
+      (agent === 'editor'
+        ? 'As the EDITOR agent, return ONLY a JSON array of operations (add/edit/delete) to repair the graph.\n'
+        : 'As the ARCHITECT agent, return ONLY the full graph as {"nodes": [...], "connections": [...]}.\n');
+  }
+
+  private pickGraphAgent(prompt: string, currentNodes: ShaderNode[], currentConnections: Connection[]): 'architect' | 'editor' {
+    const text = String(prompt || '');
+
+    // If the user attached nodes, we bias strongly toward incremental edits.
+    if (text.includes('FOCUS (expert attachments):')) return 'editor';
+
+    // If the graph is effectively empty, use architect.
+    const nonMasterCount = (currentNodes || []).filter(n => n && n.id !== 'vertex' && n.id !== 'output').length;
+    if (nonMasterCount <= 0 || (currentConnections || []).length <= 0) return 'architect';
+
+    // Lightweight heuristic for “edit mode” language.
+    const editWords = /(edit|modify|adjust|tweak|change|fix|repair|remove|delete|add|insert|rewire|refactor|optimi[sz]e|desaturat|saturaci[oó]n|quitar|agregar|añadir|cambiar|ajustar|editar|arreglar|corregir|reparar)/i;
+    if (editWords.test(text)) return 'editor';
+
+    return 'architect';
+  }
+
+  private parseGraphSlashCommand(prompt: string): {
+    forcedAgent: 'architect' | 'editor' | null;
+    cleanedPrompt: string;
+    command: 'generate' | 'edit' | null;
+    originalPrompt: string;
+  } {
+    const raw = String(prompt || '');
+    const trimmed = raw.trimStart();
+
+    // Supported commands:
+    // - /generategraph <prompt> => force architect
+    // - /editgraph <prompt>     => force editor
+    const m = /^\/(generategraph|editgraph)(?:\s+([\s\S]*))?$/i.exec(trimmed);
+    if (!m) {
+      return { forcedAgent: null, cleanedPrompt: raw, command: null, originalPrompt: raw } as any;
     }
-    return `${base}\n\n${available}`;
+
+    const rawCmd = String(m[1] || '').toLowerCase();
+    const cmd = (rawCmd === 'editgraph' ? 'edit' : 'generate') as 'generate' | 'edit';
+    const arg = (m[2] ?? '').trim();
+    const forcedAgent = cmd === 'edit' ? 'editor' : 'architect';
+
+    return {
+      forcedAgent,
+      cleanedPrompt: arg,
+      command: cmd,
+      originalPrompt: raw,
+    };
   }
 
-  private cleanBase64(dataUrlOrBase64: string): string {
-    return String(dataUrlOrBase64 || '').replace(/^data:[^;]+;base64,/, "");
-  }
-
-  private parseDataUrl(dataUrl: string): { mimeType: string; data: string } | null {
-    const str = String(dataUrl || '');
-    const m = /^data:([^;]+);base64,(.+)$/i.exec(str);
-    if (!m) return null;
-    return { mimeType: m[1], data: m[2] };
-  }
-
-  private async generateContentText(ai: GoogleGenAI, request: any, onLog?: (msg: string) => void): Promise<string> {
-    const result = await ai.models.generateContent(request);
-    return this.processResponse(result, onLog);
+  private async generateContentText(ai: GoogleGenAI, request: any, onLog?: (msg: string) => void, systemInstructionFallback?: string): Promise<string> {
+    try {
+      const result = await ai.models.generateContent(request);
+      this.logUsageMetadata(result, onLog);
+      return this.processResponse(result, onLog);
+    } catch (e: any) {
+      // If cachedContent is stale/invalid, retry once without cache.
+      const cached = request?.config?.cachedContent;
+      if (cached && systemInstructionFallback) {
+        onLog?.('Cache: request failed, retrying without cache...');
+        const retry = {
+          ...request,
+          config: {
+            ...(request.config || {}),
+            cachedContent: undefined,
+            systemInstruction: { parts: [{ text: systemInstructionFallback }] }
+          },
+        };
+        const result = await ai.models.generateContent(retry);
+        this.logUsageMetadata(result, onLog);
+        return this.processResponse(result, onLog);
+      }
+      throw e;
+    }
   }
 
   private logGraphSummary(label: string, graph: { nodes: any[]; connections: any[] } | null | undefined, onLog?: (msg: string) => void) {
@@ -90,8 +428,9 @@ export class GeminiService {
     // Include explicit master node definitions from the actual node modules,
     // so the model uses correct socket IDs (e.g. output.color, not "Base Context").
     const masterTypes = ['output', 'vertex'];
+    const uniqueTypes = Array.from(new Set([...ALL_NODE_TYPES, ...masterTypes]));
 
-    return [...ALL_NODE_TYPES, ...masterTypes]
+    return uniqueTypes
       .map(toLine)
       .join('\n');
   }
@@ -190,10 +529,7 @@ export class GeminiService {
       const result = await ai.models.generateContent({
         model: this.modelId,
         contents: [{ role: 'user', parts: [{ text: instruction }] }],
-        config: {
-          responseMimeType: 'application/json',
-          thinkingConfig: this.thinkingConfig,
-        },
+        config: this.baseConfig,
       } as any);
 
       // Best-effort extraction across SDK shapes.
@@ -206,7 +542,7 @@ export class GeminiService {
         .trim();
 
       if (!text) return null;
-      const json = this.safeJsonParse(text);
+      const json = utils.safeJsonParse(text);
 
       const imagePrompt = String(json?.imagePrompt || '').trim();
       const nodeId = String(json?.target?.nodeId || 'output');
@@ -232,18 +568,10 @@ export class GeminiService {
     }
   }
 
-  async inferAssetRequest(
+  async inferLoadAssetIntent(
     userPrompt: string,
     onLog?: (msg: string) => void
-  ): Promise<{
-    assetName: string;
-    apply: boolean;
-    applyPlan?: {
-      target: { nodeId: string; socketId: string };
-      operation: 'multiply' | 'replace';
-      channel: 'rgba' | 'rgb' | 'r' | 'g' | 'b' | 'a';
-    };
-  } | null> {
+  ): Promise<{ apply: boolean } | null> {
     const ai = this.createClient();
     if (!ai) {
       onLog?.('Missing Gemini API key (VITE_GEMINI_API_KEY).');
@@ -251,90 +579,101 @@ export class GeminiService {
     }
 
     const prompt = String(userPrompt || '').trim();
-    if (!prompt) return null;
+    if (!prompt) return { apply: false };
 
     const instruction = [
-      'You are helping a node-based shader editor.',
-      'Task: interpret a user command that adds an uploaded image as a reusable texture asset.',
-      'Return ONLY valid JSON, no markdown.',
-      '',
-      'Output JSON schema:',
-      '{',
-      '  "assetName": string,',
-      '  "apply": boolean,',
-      '  "applyPlan"?: {',
-      '    "target": { "nodeId": "output", "socketId": one of ["color","alpha","normal","specular","smoothness","occlusion","emission"] },',
-      '    "operation": "multiply" | "replace",',
-      '    "channel": one of ["rgba","rgb","r","g","b","a"]',
-      '  }',
-      '}',
-      '',
+      'Task: Determine if the user wants to ONLY SAVE an image asset or also USE/APPLY it to the current shader graph.',
+      'Return ONLY valid JSON: { "apply": boolean }',
       'Rules:',
-      '- assetName: short, filesystem-like token, lowercase, use dashes, no spaces. Example: "crystal-base".',
-      '- If the user indicates a destination (e.g., "para el base color", "for alpha", "as normal map"), treat that as apply=true and fill applyPlan.',
-      '- If user explicitly asks to apply/use/connect it now, set apply=true and fill applyPlan.',
-      '- If user only says to save/add to library and does NOT imply usage, apply=false.',
-      '- If user says base/albedo/color -> target.socketId="color" operation="multiply" channel="rgba".',
-      '- If alpha/opacity/mask -> target.socketId="alpha" operation="replace" channel="a" unless user says multiply.',
-      '- If normal/normalmap/bump -> target.socketId="normal" operation="replace" channel="rgba".',
-      '- If specular -> target.socketId="specular" operation="replace" channel="r".',
-      '- If roughness -> target.socketId="smoothness" operation="replace" channel="r" (assume already smoothness map unless told otherwise).',
+      '- apply=true if the user mentions usage (e.g., "for base color", "apply this", "as normal", "en el brillo").',
+      '- apply=false if they only say "save", "add to library", "cargar", or just provide a name.',
       '',
       'User request:',
       prompt,
     ].join('\n');
 
-    onLog?.('Inferring asset intent (name + optional apply)...');
+    onLog?.('Inferring load intent with gemini-2.0-flash-lite...');
 
     try {
       const result = await ai.models.generateContent({
-        model: this.modelId,
+        model: 'gemini-2.0-flash-lite',
         contents: [{ role: 'user', parts: [{ text: instruction }] }],
-        config: {
-          responseMimeType: 'application/json',
-          thinkingConfig: this.thinkingConfig,
-        },
+        config: { mediaResolution: 'MEDIA_RESOLUTION_HIGH' } as any,
       } as any);
 
       const candidate = (result as any)?.candidates?.[0] || (result as any)?.response?.candidates?.[0];
       const parts: any[] = candidate?.content?.parts || [];
       const text = parts
-        .filter((p: any) => p && !p.thought && p.text)
+        .filter((p: any) => p && p.text)
+        .map((p: any) => String(p.text))
+        .join('')
+        .trim();
+
+      console.log('[GeminiService] Raw Intent Response:', text);
+
+      if (!text) return { apply: false };
+      const json = utils.safeJsonParse(text);
+      console.log('[GeminiService] Parsed Intent JSON:', json);
+      return { apply: !!json?.apply };
+    } catch (e: any) {
+      console.error('[GeminiService] Intent Inference Error:', e);
+      onLog?.(`Load intent inference failed, defaulting to save. (${e?.message || String(e)})`);
+      return { apply: false };
+    }
+  }
+
+  async inferGlobalIntent(
+    userPrompt: string,
+    onLog?: (msg: string) => void
+  ): Promise<{ command: string; confidence: number } | null> {
+    const ai = this.createClient();
+    if (!ai) return null;
+
+    const instruction = [
+      'You are a routing agent for a shader graph application.',
+      'Task: Classify the user request into the most appropriate command.',
+      '',
+      'Available Commands:',
+      '- /ask: If the user is asking a question, seeking an explanation, or troubleshooting without explicitly asking for a graph change.',
+      '- /editgraph: If the user wants to modify, adjust, fix, or add something to the EXISTING shader graph.',
+      '- /generategraph: If the user wants to create a BRAND NEW shader from scratch, or if the canvas is empty.',
+      '- /generateimage: If the user wants to create a texture, image, or noise pattern using AI generation.',
+      '- /loadimage: If the user mentions loading, uploading, or picking an image file.',
+      '- /clear: If the user wants to reset, clear, or start over.',
+      '',
+      'Return ONLY valid JSON: { "command": "/the-command", "confidence": 0.0-1.0 }',
+      '',
+      'User request:',
+      userPrompt,
+    ].join('\n');
+
+    onLog?.('Routing request with gemini-2.0-flash-lite...');
+
+    try {
+      const result = await ai.models.generateContent({
+        model: 'gemini-2.0-flash-lite',
+        contents: [{ role: 'user', parts: [{ text: instruction }] }],
+        config: { responseMimeType: 'application/json' } as any,
+      } as any);
+
+      const candidate = (result as any)?.candidates?.[0] || (result as any)?.response?.candidates?.[0];
+      const parts: any[] = candidate?.content?.parts || [];
+      const text = parts
+        .filter((p: any) => p && p.text)
         .map((p: any) => String(p.text))
         .join('')
         .trim();
 
       if (!text) return null;
-      const json = this.safeJsonParse(text);
-
-      const rawName = String(json?.assetName || '').trim().toLowerCase();
-      const assetName = rawName
-        .replace(/[^a-z0-9-_]+/g, '-')
-        .replace(/-+/g, '-')
-        .replace(/^-|-$/g, '') || 'asset';
-
-      const apply = Boolean(json?.apply) || Boolean(json?.applyPlan);
-      if (!apply) return { assetName, apply: false };
-
-      const plan = json?.applyPlan;
-      const socketId = String(plan?.target?.socketId || 'color');
-      const allowedSockets = new Set(['color', 'alpha', 'normal', 'specular', 'smoothness', 'occlusion', 'emission']);
-      const finalSocketId = allowedSockets.has(socketId) ? socketId : 'color';
-      const nodeId = String(plan?.target?.nodeId || 'output') || 'output';
-      const operation = (plan?.operation === 'replace' ? 'replace' : 'multiply') as 'multiply' | 'replace';
-      const channel = (["rgba", "rgb", "r", "g", "b", "a"].includes(plan?.channel) ? plan.channel : 'rgba') as any;
+      const json = utils.safeJsonParse(text);
+      if (!json || !json.command) return null;
 
       return {
-        assetName,
-        apply: true,
-        applyPlan: {
-          target: { nodeId, socketId: finalSocketId },
-          operation,
-          channel,
-        },
+        command: String(json.command).startsWith('/') ? json.command : `/${json.command}`,
+        confidence: Number(json.confidence || 0)
       };
     } catch (e: any) {
-      onLog?.(`Asset intent inference failed, using defaults. (${e?.message || String(e)})`);
+      console.error('[Router] Inference Error:', e);
       return null;
     }
   }
@@ -397,10 +736,7 @@ export class GeminiService {
       const result = await ai.models.generateContent({
         model: this.modelId,
         contents: [{ role: 'user', parts: [{ text: instruction }] }],
-        config: {
-          responseMimeType: 'application/json',
-          thinkingConfig: this.thinkingConfig,
-        },
+        config: this.baseConfig,
       } as any);
 
       const candidate = (result as any)?.candidates?.[0] || (result as any)?.response?.candidates?.[0];
@@ -412,7 +748,7 @@ export class GeminiService {
         .trim();
 
       if (!text) return null;
-      const json = this.safeJsonParse(text);
+      const json = utils.safeJsonParse(text);
       const assetId = String(json?.assetId || '').trim();
       if (!assetId) return null;
 
@@ -445,10 +781,10 @@ export class GeminiService {
 
     // Optional reference image conditioning
     const ref = referenceImageDataUrl && referenceImageDataUrl.startsWith('data:image/')
-      ? this.parseDataUrl(referenceImageDataUrl)
+      ? utils.parseDataUrl(referenceImageDataUrl)
       : null;
     if (ref) {
-      parts.push({ inlineData: { mimeType: ref.mimeType, data: this.cleanBase64(ref.data) } });
+      parts.push({ inlineData: { mimeType: ref.mimeType, data: utils.cleanBase64(ref.data) } });
     }
 
     const userPrompt = String(prompt || '').trim();
@@ -508,7 +844,7 @@ export class GeminiService {
     }
 
     const src = sourceImageDataUrl && sourceImageDataUrl.startsWith('data:image/')
-      ? this.parseDataUrl(sourceImageDataUrl)
+      ? utils.parseDataUrl(sourceImageDataUrl)
       : null;
     if (!src) {
       onLog?.('Edit failed: source image must be an image/* data URL.');
@@ -519,7 +855,7 @@ export class GeminiService {
     if (!prompt) return null;
 
     const parts: any[] = [
-      { inlineData: { mimeType: src.mimeType, data: this.cleanBase64(src.data) } },
+      { inlineData: { mimeType: src.mimeType, data: utils.cleanBase64(src.data) } },
       {
         text:
           'Edit the provided texture image according to the instructions. ' +
@@ -560,162 +896,63 @@ export class GeminiService {
     return { dataUrl, mimeType, ...(text ? { text } : {}) };
   }
 
-  private safeJsonParse(text: string): any {
-    const trimmed = String(text || '').trim();
-    if (!trimmed) throw new Error('Empty JSON text');
-
-    // Strip common Markdown fences
-    const noFences = trimmed
-      .replace(/^```(json)?/i, '')
-      .replace(/```$/i, '')
-      .trim();
-
-    try {
-      return JSON.parse(noFences);
-    } catch {
-      // Try extracting the first {...} or [...] block
-      const firstObj = noFences.indexOf('{');
-      const lastObj = noFences.lastIndexOf('}');
-      if (firstObj !== -1 && lastObj !== -1 && lastObj > firstObj) {
-        return JSON.parse(noFences.slice(firstObj, lastObj + 1));
-      }
-      const firstArr = noFences.indexOf('[');
-      const lastArr = noFences.lastIndexOf(']');
-      if (firstArr !== -1 && lastArr !== -1 && lastArr > firstArr) {
-        return JSON.parse(noFences.slice(firstArr, lastArr + 1));
-      }
-      throw new Error('Invalid JSON');
-    }
-  }
-
-  private normalizeGraph(raw: any): { nodes: any[]; connections: any[] } | null {
-    if (!raw || typeof raw !== 'object') return null;
-
-    const nodesRaw = Array.isArray((raw as any).nodes) ? (raw as any).nodes : [];
-    const connsRaw = Array.isArray((raw as any).connections)
-      ? (raw as any).connections
-      : Array.isArray((raw as any).edges)
-        ? (raw as any).edges
-        : [];
-
-    const nodes = nodesRaw
-      .filter((n: any) => n && typeof n === 'object')
-      .map((n: any, idx: number) => {
-        const id = String(n.id ?? `n${idx + 1}`);
-        const type = String(n.type ?? 'float');
-        const x = typeof n.x === 'number' ? n.x : (idx * 220);
-        const y = typeof n.y === 'number' ? n.y : 0;
-        const data = (n.data && typeof n.data === 'object') ? n.data : undefined;
-
-        // Normalize scalar value hints
-        const dataValue = (n.dataValue !== undefined)
-          ? n.dataValue
-          : (n.initialValue !== undefined)
-            ? n.initialValue
-            : (data && (data as any).value !== undefined)
-              ? (data as any).value
-              : undefined;
-
-        return { id, type, x, y, ...(data ? { data } : {}), ...(dataValue !== undefined ? { dataValue } : {}) };
-      });
-
-    const connections = connsRaw
-      .filter((c: any) => c && typeof c === 'object')
-      .map((c: any, idx: number) => {
-        // Accept both Lumina connections and Agent2 edge format.
-        if (c.from && c.to) {
-          return {
-            id: c.id || `conn-${idx}-${Math.random().toString(36).slice(2)}`,
-            sourceNodeId: c.from.node,
-            sourceSocketId: c.from.port,
-            targetNodeId: c.to.node,
-            targetSocketId: c.to.port,
-          };
-        }
-        return {
-          id: c.id || `conn-${idx}-${Math.random().toString(36).slice(2)}`,
-          sourceNodeId: c.sourceNodeId,
-          sourceSocketId: c.sourceSocketId,
-          targetNodeId: c.targetNodeId,
-          targetSocketId: c.targetSocketId,
-        };
-      });
-
-    return { nodes, connections };
-  }
-
-  private inferRequiredMasterInputs(prompt: string): string[] {
-    const text = String(prompt || '').toLowerCase();
-    const required = new Set<string>();
-
-    // Default minimal output.
-    required.add('color');
-
-    // Transparency / cutout
-    if (/(alpha\b|opacity|transparent|transparente|cutout|clip|recorte|mask|mascara)/i.test(text)) {
-      required.add('alpha');
-      if (/(clip|cutout|recorte)/i.test(text)) required.add('alphaClip');
-    }
-
-    // Emission / glow
-    if (/(emiss|emision|glow|brill|neon|lumin)/i.test(text)) required.add('emission');
-
-    // Normals / relief / parallax
-    if (/(normal\s*map|normalmap|bump|relieve|relief|parallax|height\s*map|heightmap|displace|displacement)/i.test(text)) {
-      required.add('normal');
-    }
-
-    // Ambient occlusion
-    if (/(ao\b|ambient\s*occlusion|occlusion|oclusion)/i.test(text)) required.add('occlusion');
-
-    // Specular / smoothness / roughness
-    if (/(specular|especular|gloss|glossiness|smoothness|suavidad|roughness|rugosidad)/i.test(text)) {
-      // Lumina master uses smoothness, not roughness.
-      required.add('smoothness');
-      // If user explicitly asks for specular highlights/control.
-      if (/(specular|especular)/i.test(text)) required.add('specular');
-    }
-
-    return Array.from(required);
-  }
-
-  private buildSoftwareContext(currentNodes: ShaderNode[], currentConnections: Connection[], prompt?: string): string {
-    // Keep the current graph snapshot compact to avoid blowing up context.
-    const snapshot = {
-      nodes: currentNodes.map(n => ({ id: n.id, type: n.type, x: Math.round(n.x), y: Math.round(n.y), data: n.data })),
-      connections: currentConnections.map(c => ({
-        sourceNodeId: c.sourceNodeId,
-        sourceSocketId: c.sourceSocketId,
-        targetNodeId: c.targetNodeId,
-        targetSocketId: c.targetSocketId,
-      })),
-    };
-
+  private buildStableSoftwareContext(agent: 'architect' | 'editor'): string {
     const outputDef = getNodeModule('output')?.definition;
     const vertexDef = getNodeModule('vertex')?.definition;
     const outputInputs = (outputDef?.inputs || []).map(i => `${i.id}(${i.type})`).join(', ');
     const vertexOutputs = (vertexDef?.outputs || []).map(o => `${o.id}(${o.type})`).join(', ');
 
-    const requiredMasterInputs = this.inferRequiredMasterInputs(prompt || '');
+    const outputFormatLines = agent === 'editor'
+      ? [
+        'AUTHORITATIVE OUTPUT FORMAT (MUST FOLLOW):',
+        '- Output ONLY valid JSON (no markdown, no comments).',
+        '- Output a JSON ARRAY of operation objects (preferred), OR multiple JSON objects separated by blank lines.',
+        '- Each operation object schema:',
+        '  {',
+        '    "action": "add" | "edit" | "delete",',
+        '    "id": string,',
+        '    "node_content"?: object | string,',
+        '    "connection_content"?: object | object[] | string,',
+        '    "connections_delete"?: object | object[] | string',
+        '  }',
+        '- NOTE: the app will apply these ops to the CURRENT_GRAPH_SNAPSHOT to produce the final graph.',
+        '- For "add": node_content should be a minimal node object (id,type,x,y,data?) OR a JSON string of that object.',
+        '- For "edit": node_content should be a PARTIAL node patch (x/y/data/type/etc). data is shallow-merged.',
+        '- For "delete": only {action,id} is required; node and its connections will be removed.',
+        '- connection_content: optional connections to ADD (single connection or array).',
+        '- connections_delete: optional connections to DELETE (single connection or array). Match by id if present, else by endpoints.',
+        '- Use only valid node types and socket ids from AVAILABLE_NODES.',
+        '',
+        'OPS EXAMPLE:',
+        '[',
+        '  {"action":"add","id":"float-1","node_content":{"id":"float-1","type":"float","x":400,"y":450,"data":{"value":0.5}},"connection_content":{"sourceNodeId":"float-1","sourceSocketId":"out","targetNodeId":"output","targetSocketId":"color"}},',
+        '  {"action":"edit","id":"float-1","node_content":{"data":{"value":0.75}}},',
+        '  {"action":"edit","id":"output","connections_delete":{"sourceNodeId":"float-1","sourceSocketId":"out","targetNodeId":"output","targetSocketId":"color"}}',
+        ']',
+      ]
+      : [
+        'AUTHORITATIVE OUTPUT FORMAT (MUST FOLLOW):',
+        '- Output ONLY valid JSON (no markdown, no comments).',
+        '- Root: { "nodes": [...], "connections": [...] }',
+        '- node fields required: id(string), type(string), x(number), y(number)',
+        '- node optional fields: data(object), dataValue(any)',
+        '- connection fields required: sourceNodeId, sourceSocketId, targetNodeId, targetSocketId (strings)',
+        '- connection optional: id(string)',
+        '',
+        'CANONICAL MINIMAL EXAMPLE (VALID OUTPUT SHAPE):',
+        '{"nodes":[{"id":"vertex","type":"vertex","x":800,"y":150},{"id":"output","type":"output","x":800,"y":450},{"id":"float-1","type":"float","x":400,"y":450,"data":{"value":0.5}}],"connections":[{"sourceNodeId":"float-1","sourceSocketId":"out","targetNodeId":"output","targetSocketId":"color"}]}',
+      ];
 
     return [
       'SOFTWARE_CONTEXT: Lumina Shader Graph (lumina-shader-graph)',
       '',
-      'AUTHORITATIVE OUTPUT FORMAT (MUST FOLLOW):',
-      '- Output ONLY valid JSON (no markdown, no comments).',
-      '- Root: { "nodes": [...], "connections": [...] }',
-      '- node fields required: id(string), type(string), x(number), y(number)',
-      '- node optional fields: data(object), dataValue(any)',
-      '- connection fields required: sourceNodeId, sourceSocketId, targetNodeId, targetSocketId (strings)',
-      '- connection optional: id(string)',
+      ...outputFormatLines,
       '',
       'RAW APP GRAPH SHAPE (REFERENCE — DO NOT EMIT THESE EXTRA FIELDS):',
       '- Internally, the app stores ShaderNode as:',
       '  { id, type, label, x, y, inputs:[{id,label,type}], outputs:[{id,label,type}], data:{...} }',
-      '- Your JSON output must be the MINIMAL graph shape above; the app derives label/inputs/outputs from node.type.',
-      '',
-      'CANONICAL MINIMAL EXAMPLE (VALID OUTPUT SHAPE):',
-      '{"nodes":[{"id":"vertex","type":"vertex","x":800,"y":150},{"id":"output","type":"output","x":800,"y":450},{"id":"float-1","type":"float","x":400,"y":450,"data":{"value":0.5}}],"connections":[{"sourceNodeId":"float-1","sourceSocketId":"out","targetNodeId":"output","targetSocketId":"color"}]}',
+      '- If agent=editor, node_content uses the MINIMAL node shape (id,type,x,y,data?).',
+      '- If agent=architect, your JSON output must be the MINIMAL graph shape above; the app derives label/inputs/outputs from node.type.',
       '',
       'NODE DATA BINDINGS (IMPORTANT):',
       '- color node: set data.value as a hex string "#RRGGBB" (example: {"type":"color","data":{"value":"#ff00aa"}}).',
@@ -732,438 +969,73 @@ export class GeminiService {
       '  - Default: connect ONLY output.color.',
       '  - Do NOT connect alpha/alphaClip/normal/emission/occlusion/specular/smoothness unless explicitly needed.',
       '  - Do NOT add constant nodes just to fill unused master inputs.',
-      `- REQUIRED_MASTER_INPUTS (derived from user prompt): ${requiredMasterInputs.map(s => `output.${s}`).join(', ')}`,
+      '- REQUIRED_MASTER_INPUTS will be provided in the dynamic context.',
       '- Include master nodes with stable ids:',
       '  - vertex node: { id: "vertex", type: "vertex" }',
       '  - output node: { id: "output", type: "output" }',
       '',
       'AVAILABLE_NODES (type: Inputs[...] -> Outputs[...]):',
       this.definitions,
-      '',
-      'CURRENT_GRAPH_SNAPSHOT (for modification tasks):',
-      JSON.stringify(snapshot),
     ].join('\n');
   }
 
-  private sanitizeGraph(rawData: any): {
-    graph: { nodes: any[]; connections: any[] } | null;
-    report: {
-      changed: boolean;
-      issues: string[];
-      examples: string[];
-      stats: Record<string, number>;
-      final: { nodeCount: number; connectionCount: number };
-    };
-  } {
-    const issues: string[] = [];
-    const examples: string[] = [];
-    const exampleLimit = 16;
-    const pushExample = (msg: string) => {
-      if (examples.length >= exampleLimit) return;
-      if (!msg) return;
-      examples.push(String(msg));
-    };
-    const stats: Record<string, number> = {
-      nodes_in: 0,
-      connections_in: 0,
-      nodes_unknownType_removed: 0,
-      nodes_id_renamed: 0,
-      nodes_master_added: 0,
-      nodes_master_conflict_renamed: 0,
-      connections_invalid_removed: 0,
-      connections_trimmed_by_maxIncoming: 0,
-      nodes_pruned_unreachable: 0,
-    };
-
-    const normalized = this.normalizeGraph(rawData);
-    if (!normalized) {
-      return {
-        graph: null,
-        report: { changed: false, issues: ['sanitizeGraph: input did not contain a valid {nodes, connections/edges} object.'], examples, stats, final: { nodeCount: 0, connectionCount: 0 } },
-      };
-    }
-
-    stats.nodes_in = normalized.nodes.length;
-    stats.connections_in = normalized.connections.length;
-
-    // Filter unknown types to reduce crashes.
-    const allowedTypes = new Set<string>([...ALL_NODE_TYPES, 'output', 'vertex']);
-    const sanitizedNodes = normalized.nodes
-      .filter(n => {
-        const ok = allowedTypes.has(n.type);
-        if (!ok) {
-          stats.nodes_unknownType_removed++;
-          pushExample(`Removed node id=${String(n.id)} type=${String(n.type)} (unknown type)`);
-        }
-        return ok;
-      })
-      .map(n => ({
-        id: String(n.id),
-        type: String(n.type),
-        x: typeof n.x === 'number' ? n.x : 0,
-        y: typeof n.y === 'number' ? n.y : 0,
-        ...(n.data ? { data: n.data } : {}),
-        ...(n.dataValue !== undefined ? { dataValue: n.dataValue } : {}),
-      }));
-
-    if (stats.nodes_unknownType_removed > 0) {
-      issues.push(`Removed ${stats.nodes_unknownType_removed} node(s) with unknown type.`);
-    }
-
-    // Ensure IDs are unique; resolve collisions deterministically.
-    const usedIds = new Set<string>();
-    for (const node of sanitizedNodes) {
-      const base = node.id;
-      if (!usedIds.has(base)) {
-        usedIds.add(base);
-        continue;
-      }
-      let i = 2;
-      while (usedIds.has(`${base}-${i}`)) i++;
-      node.id = `${base}-${i}`;
-      usedIds.add(node.id);
-      stats.nodes_id_renamed++;
-      pushExample(`Renamed duplicate node id "${base}" -> "${node.id}"`);
-    }
-
-    if (stats.nodes_id_renamed > 0) {
-      issues.push(`Renamed ${stats.nodes_id_renamed} node id(s) to resolve duplicates.`);
-    }
-
-    // Ensure master node IDs exist AND match expected types.
-    const renameIfOccupiedByWrongType = (id: string, requiredType: string) => {
-      const existing = sanitizedNodes.find(n => n.id === id);
-      if (!existing) return;
-      if (existing.type === requiredType) return;
-
-      // Rename the conflicting node to avoid breaking preview lookups.
-      const base = `${existing.type}-${id}`;
-      let i = 1;
-      let next = `${base}-${i}`;
-      while (usedIds.has(next)) {
-        i++;
-        next = `${base}-${i}`;
-      }
-      usedIds.delete(existing.id);
-      const before = existing.id;
-      existing.id = next;
-      usedIds.add(existing.id);
-      stats.nodes_master_conflict_renamed++;
-      pushExample(`Renamed node occupying reserved id "${id}" (type=${existing.type}) from "${before}" -> "${existing.id}"`);
-    };
-
-    renameIfOccupiedByWrongType('vertex', 'vertex');
-    renameIfOccupiedByWrongType('output', 'output');
-
-    if (stats.nodes_master_conflict_renamed > 0) {
-      issues.push(`Renamed ${stats.nodes_master_conflict_renamed} node(s) that conflicted with reserved master ids ('vertex'/'output').`);
-    }
-
-    const ensureNode = (id: string, type: string, x: number, y: number) => {
-      if (!sanitizedNodes.some(n => n.id === id)) {
-        sanitizedNodes.push({ id, type, x, y });
-        stats.nodes_master_added++;
-        pushExample(`Added missing master node id="${id}" type="${type}"`);
-      }
-    };
-
-    // Ensure master nodes exist with stable IDs.
-    ensureNode('vertex', 'vertex', 800, 150);
-    ensureNode('output', 'output', 800, 450);
-
-    if (stats.nodes_master_added > 0) {
-      issues.push(`Added ${stats.nodes_master_added} missing master node(s) ('vertex'/'output').`);
-    }
-
-    const nodeById = new Map(sanitizedNodes.map(n => [n.id, n]));
-
-    const normalizeToken = (value: string) =>
-      String(value || '')
-        .toLowerCase()
-        .replace(/[^a-z0-9]+/g, '');
-
-    const resolveSocketId = (
-      rawSocketId: any,
-      sockets: Array<{ id: string; label?: string }> | undefined,
-      fallbackId: string | undefined,
-      nodeType: string,
-      direction: 'input' | 'output'
-    ): { id: string | undefined; changed: boolean; reason?: string } => {
-      const list = Array.isArray(sockets) ? sockets : [];
-      const requested = rawSocketId !== undefined && rawSocketId !== null ? String(rawSocketId) : '';
-      if (!requested) return { id: fallbackId, changed: Boolean(fallbackId), reason: 'missing' };
-
-      // Fast path: exact id match
-      if (list.some(s => s.id === requested)) return { id: requested, changed: false };
-
-      const reqNorm = normalizeToken(requested);
-
-      // A few practical aliases for common hallucinations / labels.
-      // This specifically fixes historical "Base Context" connections to the master output.
-      if (nodeType === 'output' && direction === 'input') {
-        const outputAliases: Record<string, string> = {
-          basecontext: 'color',
-          surface: 'color',
-          basecolor: 'color',
-          albedo: 'color',
-          roughness: 'smoothness',
-          opacity: 'alpha',
-          alphaclip: 'alphaClip',
-          ao: 'occlusion',
-        };
-        const aliased = outputAliases[reqNorm];
-        if (aliased && list.some(s => s.id === aliased)) {
-          return { id: aliased, changed: true, reason: `alias:${requested}` };
-        }
-      }
-
-      // Heuristic: match by normalized id
-      const byNormId = list.find(s => normalizeToken(s.id) === reqNorm);
-      if (byNormId) return { id: byNormId.id, changed: true, reason: `normId:${requested}` };
-
-      // Heuristic: match by normalized label
-      const byNormLabel = list.find(s => s.label && normalizeToken(s.label) === reqNorm);
-      if (byNormLabel) return { id: byNormLabel.id, changed: true, reason: `label:${requested}` };
-
-      // Heuristic: label contains token (or vice-versa)
-      const byContains = list.find(s => {
-        const lid = normalizeToken(s.id);
-        const ll = s.label ? normalizeToken(s.label) : '';
-        return (ll && (ll.includes(reqNorm) || reqNorm.includes(ll))) || (lid && (lid.includes(reqNorm) || reqNorm.includes(lid)));
-      });
-      if (byContains) return { id: byContains.id, changed: true, reason: `contains:${requested}` };
-
-      return { id: fallbackId, changed: Boolean(fallbackId), reason: `fallback:${requested}` };
-    };
-
-    let sanitizedConnections = normalized.connections
-      .map((conn: any) => {
-        const connLabel = `${String(conn.sourceNodeId)}.${String(conn.sourceSocketId ?? '?')} -> ${String(conn.targetNodeId)}.${String(conn.targetSocketId ?? '?')}`;
-        const sourceNode = nodeById.get(conn.sourceNodeId);
-        const targetNode = nodeById.get(conn.targetNodeId);
-        if (!sourceNode || !targetNode) {
-          stats.connections_invalid_removed++;
-          pushExample(`Removed connection ${connLabel} (missing node)`);
-          return null;
-        }
-
-        const sourceMod = getNodeModule(sourceNode.type);
-        const targetMod = getNodeModule(targetNode.type);
-        const sourceDef = sourceMod?.definition;
-        const targetDef = targetMod?.definition;
-        if (!sourceDef || !targetDef) {
-          stats.connections_invalid_removed++;
-          pushExample(`Removed connection ${connLabel} (missing node definition)`);
-          return null;
-        }
-
-        const sourceFallback = getFallbackSocketId({ ...(sourceDef as any), id: sourceNode.id, x: 0, y: 0, data: {} } as any, 'output', sourceMod?.socketRules);
-        const targetFallback = getFallbackSocketId({ ...(targetDef as any), id: targetNode.id, x: 0, y: 0, data: {} } as any, 'input', targetMod?.socketRules);
-
-        const sourceResolved = resolveSocketId(
-          conn.sourceSocketId,
-          sourceDef.outputs as any,
-          sourceFallback || sourceDef.outputs[0]?.id,
-          sourceNode.type,
-          'output'
-        );
-        const targetResolved = resolveSocketId(
-          conn.targetSocketId,
-          targetDef.inputs as any,
-          targetFallback || targetDef.inputs[0]?.id,
-          targetNode.type,
-          'input'
-        );
-
-        const sourceSocketId = sourceResolved.id;
-        const targetSocketId = targetResolved.id;
-        if (!sourceSocketId || !targetSocketId) {
-          stats.connections_invalid_removed++;
-          pushExample(`Removed connection ${connLabel} (missing socket id)`);
-          return null;
-        }
-
-        if (sourceResolved.changed) {
-          pushExample(`Adjusted source socket ${sourceNode.id}: "${String(conn.sourceSocketId)}" -> "${sourceSocketId}" (${sourceResolved.reason})`);
-        }
-        if (targetResolved.changed) {
-          pushExample(`Adjusted target socket ${targetNode.id}: "${String(conn.targetSocketId)}" -> "${targetSocketId}" (${targetResolved.reason})`);
-        }
-
-        return {
-          id: conn.id || `conn-${Math.random().toString(36).slice(2)}`,
-          sourceNodeId: sourceNode.id,
-          sourceSocketId,
-          targetNodeId: targetNode.id,
-          targetSocketId,
-        };
-      })
-      .filter(Boolean);
-
-    if (stats.connections_invalid_removed > 0) {
-      issues.push(`Removed ${stats.connections_invalid_removed} invalid connection(s) (missing nodes/defs/sockets).`);
-    }
-
-    // Enforce per-input maxConnections to avoid "two outputs into one input" errors.
-    // Default is 1 unless socketRules overrides it.
-    const tempNodes: ShaderNode[] = sanitizedNodes.map(n => {
-      const mod = getNodeModule(n.type);
-      const def = mod?.definition;
-      return {
-        id: n.id,
-        type: n.type,
-        label: def?.label || n.type,
-        x: n.x,
-        y: n.y,
-        inputs: def?.inputs || [],
-        outputs: def?.outputs || [],
-        data: { ...(n.data || {}), ...(n.dataValue !== undefined ? { value: n.dataValue } : {}) },
-      } as ShaderNode;
-    });
-    const tempById = new Map(tempNodes.map(n => [n.id, n]));
-
-    const getMaxIncoming = (targetNodeId: string, targetSocketId: string): number => {
-      const node = tempById.get(targetNodeId);
-      if (!node) return 1;
-      const mod = getNodeModule(node.type);
-      const def = mod?.definition as any;
-      if (!def) return 1;
-      try {
-        const effectiveInputs = getEffectiveSockets(node, def.inputs ?? [], 'input', sanitizedConnections as any, mod?.socketRules);
-        const socket = effectiveInputs.find(s => s.id === targetSocketId);
-        return socket?.maxConnections ?? 1;
-      } catch {
-        return 1;
-      }
-    };
-
-    // Sort by source.x so we keep the most left-to-right plausible wire first.
-    sanitizedConnections = (sanitizedConnections as any[])
-      .map((c, idx) => ({ c, idx }))
-      .sort((a, b) => {
-        const aSourceX = (nodeById.get(a.c.sourceNodeId)?.x ?? 0);
-        const bSourceX = (nodeById.get(b.c.sourceNodeId)?.x ?? 0);
-        if (a.c.targetNodeId !== b.c.targetNodeId) return a.c.targetNodeId.localeCompare(b.c.targetNodeId);
-        if (a.c.targetSocketId !== b.c.targetSocketId) return a.c.targetSocketId.localeCompare(b.c.targetSocketId);
-        if (aSourceX !== bSourceX) return aSourceX - bSourceX;
-        return a.idx - b.idx;
-      })
-      .reduce((acc: any[], item) => {
-        const c = item.c;
-        const key = `${c.targetNodeId}::${c.targetSocketId}`;
-        const max = getMaxIncoming(c.targetNodeId, c.targetSocketId);
-        const current = acc.filter(x => `${x.targetNodeId}::${x.targetSocketId}` === key).length;
-        if (current < max) {
-          acc.push(c);
-        } else {
-          stats.connections_trimmed_by_maxIncoming++;
-          pushExample(`Trimmed extra incoming to ${c.targetNodeId}.${c.targetSocketId}: removed ${c.sourceNodeId}.${c.sourceSocketId} (max=${max})`);
-        }
-        return acc;
-      }, []);
-
-    if (stats.connections_trimmed_by_maxIncoming > 0) {
-      issues.push(`Trimmed ${stats.connections_trimmed_by_maxIncoming} connection(s) that exceeded input maxConnections.`);
-    }
-
-    // Prune unreachable nodes (orphans/dead subgraphs) to keep output graph stable.
-    // IMPORTANT: If output has no incoming connections, pruning would delete the entire work-in-progress graph
-    // (leaving only masters) and looks like a scene reset. In that case, keep all sanitized nodes.
-    const outputHasIncoming = (sanitizedConnections as any[]).some(c => c && c.targetNodeId === 'output');
-
-    let prunedNodes = sanitizedNodes;
-    let prunedConnections = sanitizedConnections as any[];
-
-    if (outputHasIncoming) {
-      // Keep anything that contributes to 'output' (and always keep masters).
-      const keep = new Set<string>(['output', 'vertex']);
-      const incomingByTarget = new Map<string, any[]>();
-      for (const c of sanitizedConnections as any[]) {
-        const key = c.targetNodeId;
-        const arr = incomingByTarget.get(key) || [];
-        arr.push(c);
-        incomingByTarget.set(key, arr);
-      }
-
-      const stack: string[] = ['output', 'vertex'];
-      while (stack.length > 0) {
-        const nodeId = stack.pop()!;
-        const incomings = incomingByTarget.get(nodeId) || [];
-        for (const c of incomings) {
-          const src = String(c.sourceNodeId);
-          if (!keep.has(src)) {
-            keep.add(src);
-            stack.push(src);
-          }
-        }
-      }
-
-      prunedNodes = sanitizedNodes.filter(n => keep.has(n.id));
-      stats.nodes_pruned_unreachable = sanitizedNodes.length - prunedNodes.length;
-      if (stats.nodes_pruned_unreachable > 0) {
-        issues.push(`Pruned ${stats.nodes_pruned_unreachable} unreachable/orphan node(s) (not contributing to output).`);
-        const prunedSample = sanitizedNodes
-          .filter(n => !keep.has(n.id))
-          .slice(0, 6)
-          .map(n => `${n.id}(${n.type})`);
-        if (prunedSample.length > 0) {
-          pushExample(`Pruned unreachable nodes: ${prunedSample.join(', ')}${stats.nodes_pruned_unreachable > prunedSample.length ? ', ...' : ''}`);
-        }
-      }
-      const prunedNodeIds = new Set(prunedNodes.map(n => n.id));
-      prunedConnections = (sanitizedConnections as any[]).filter(c => prunedNodeIds.has(c.sourceNodeId) && prunedNodeIds.has(c.targetNodeId));
-    }
-
-    const changed =
-      stats.nodes_unknownType_removed > 0 ||
-      stats.nodes_id_renamed > 0 ||
-      stats.nodes_master_added > 0 ||
-      stats.nodes_master_conflict_renamed > 0 ||
-      stats.connections_invalid_removed > 0 ||
-      stats.connections_trimmed_by_maxIncoming > 0 ||
-      stats.nodes_pruned_unreachable > 0;
-
-    const finalGraph = { nodes: prunedNodes, connections: prunedConnections };
-    return {
-      graph: finalGraph,
-      report: {
-        changed,
-        issues,
-        examples,
-        stats,
-        final: { nodeCount: prunedNodes.length, connectionCount: prunedConnections.length },
-      },
-    };
-  }
-
-  async refineGraph(draftGraph: any, linterLogs: string[], onLog?: (msg: string) => void, evidenceImageBase64?: string): Promise<any | null> {
+  async refineGraph(draftGraph: any, linterLogs: string[], agent: 'architect' | 'editor', onLog?: (msg: string) => void, evidenceImageBase64?: string): Promise<any | null> {
     const ai = this.createClient();
     if (!ai) return null;
     if (linterLogs.length === 0 && !evidenceImageBase64) return draftGraph;
     if (onLog) onLog("Initializing Refining Agent (Thinking Mode)...");
-    const systemInstruction = this.buildRefineSystemInstruction();
+    const systemInstruction = this.buildRefineSystemInstruction(agent);
 
     try {
       let parts: any[] = [];
       if (evidenceImageBase64) {
-        parts.push({ inlineData: { mimeType: "image/png", data: this.cleanBase64(evidenceImageBase64) } });
+        parts.push({ inlineData: { mimeType: "image/png", data: utils.cleanBase64(evidenceImageBase64) } });
       }
       parts.push({ text: `Fix this graph:\n${JSON.stringify(draftGraph)}\n\nErrors:\n${linterLogs.join('\n')}` });
 
       if (onLog) onLog("Thinking (Repairing)...");
+
+      const cacheKey = `refiner:${this.modelId}:${utils.fnv1aHex(systemInstruction)}`;
+      const cachedContent = await this.getOrCreateCachedPrefix(ai, cacheKey, systemInstruction, onLog);
+
       const text = await this.generateContentText(ai, {
         model: this.modelId,
         contents: parts,
-        systemInstruction: { parts: [{ text: systemInstruction }] },
         config: {
           responseMimeType: "application/json",
           thinkingConfig: this.thinkingConfig,
+          ...(cachedContent ? { cachedContent } : { systemInstruction: { parts: [{ text: systemInstruction }] } }),
         }
-      }, onLog);
+      }, onLog, systemInstruction);
       if (!text) return draftGraph;
-      const fixed = this.safeJsonParse(text);
+      const parsed = utils.safeJsonParse(text);
+
+      // Support ops-mode repair outputs (apply ops to the provided draftGraph).
+      const fixed = (parsed && typeof parsed === 'object' && Array.isArray((parsed as any).nodes))
+        ? parsed
+        : (Array.isArray(parsed) || (parsed && typeof parsed === 'object' && (parsed as any).action))
+          ? utils.applyGraphOps(
+            {
+              nodes: Array.isArray(draftGraph?.nodes) ? draftGraph.nodes : [],
+              connections: Array.isArray(draftGraph?.connections) ? draftGraph.connections : [],
+            },
+            Array.isArray(parsed) ? parsed : [parsed],
+            onLog
+          )
+          : ((): any => {
+            const ops = utils.safeJsonParseMany(text);
+            if (ops.length === 0) return parsed;
+            return utils.applyGraphOps(
+              {
+                nodes: Array.isArray(draftGraph?.nodes) ? draftGraph.nodes : [],
+                connections: Array.isArray(draftGraph?.connections) ? draftGraph.connections : [],
+              },
+              ops,
+              onLog
+            );
+          })();
       if (onLog) onLog("Graph refined.");
-      const sanitized = this.sanitizeGraph(fixed);
+      const sanitized = utils.sanitizeGraph(fixed);
       if (onLog && sanitized.report.changed) {
         onLog(`Sanitizer: ${sanitized.report.issues.join(' | ')}`);
         if (sanitized.report.examples.length > 0) {
@@ -1194,10 +1066,31 @@ export class GeminiService {
 
     // One-Shot Pipeline
     try {
-      if (onLog) onLog('Initializing Shader Architect (Thinking Mode: High)...');
+      const parsed = this.parseGraphSlashCommand(prompt);
+      const effectivePrompt = parsed.cleanedPrompt;
 
-      const softwareContext = this.buildSoftwareContext(currentNodes, currentConnections, prompt);
-      const systemInstruction = this.buildSystemInstruction(softwareContext);
+
+      const persistChat = true;
+      const chatEnabled = true;
+
+      const agent = parsed.forcedAgent || this.pickGraphAgent(effectivePrompt, currentNodes, currentConnections);
+
+      // Cache behavior is enabled by default: use stable software context
+      const softwareContext = this.buildStableSoftwareContext(agent);
+      const systemInstruction = this.buildSystemInstruction(agent, softwareContext);
+
+      if (onLog) {
+        if (parsed.command) {
+          onLog(`Command: /${parsed.command} (forcing ${agent === 'editor' ? 'edit' : 'generate'} mode)`);
+        }
+        if (agent === 'editor') {
+          onLog('Output mode: ops (diff-based)');
+        }
+        onLog(agent === 'editor'
+          ? 'Initializing Graph Editor (Incremental Mode: High)...'
+          : 'Initializing Shader Architect (Thinking Mode: High)...'
+        );
+      }
 
       const mediaParts: any[] = [];
       if (imageBase64) {
@@ -1218,110 +1111,117 @@ export class GeminiService {
           mediaParts.push({
             inlineData: {
               mimeType: mimeType,
-              data: this.cleanBase64(imageBase64)
+              data: utils.cleanBase64(imageBase64)
             }
           });
         }
       }
 
-      const parts: any[] = [...mediaParts, { text: `User Prompt: ${prompt}` }];
+      const parts: any[] = [...mediaParts, { text: `User Prompt: ${effectivePrompt}` }];
+
+      // If persistent chat is enabled for editor, prefer relying on chat history baseline/ops instead
+      // of re-sending full CURRENT_GRAPH_SNAPSHOT every time.
+      const shouldOmitDynamicGraphContext = persistChat && agent === 'editor' && !!this.persistentBaselineGraph;
+
+      // Keep dynamic snapshot outside of the cached prefix when applicable.
+      const dynamicContext = !shouldOmitDynamicGraphContext
+        ? utils.buildDynamicGraphContext(currentNodes, currentConnections, effectivePrompt)
+        : '';
+
+      const effectiveParts: any[] = shouldOmitDynamicGraphContext
+        ? [...mediaParts, { text: `USER_PROMPT:\n${effectivePrompt}` }]
+        : [...mediaParts, { text: `${dynamicContext}\n\nUSER_PROMPT:\n${effectivePrompt}` }];
+
+      const cachedContent = (!chatEnabled)
+        ? await this.getOrCreateCachedPrefix(
+          ai,
+          `${agent}:${this.modelId}:${utils.fnv1aHex(systemInstruction)}`,
+          systemInstruction,
+          onLog
+        )
+        : null;
+
+      const chat = chatEnabled
+        ? (persistChat && agent === 'editor'
+          ? await this.getOrCreatePersistentEditorChat(ai, systemInstruction, onLog)
+          : await this.createGraphChat(ai, agent, systemInstruction, onLog))
+        : null;
 
       if (onLog) onLog('Thinking (Reasoning + Planning + Compiling)...');
-      if (onLog) onLog('[RSA] Mode Enabled: loops=1, candidates=3');
 
-      // RSA Loop Implementation
-      let currentCandidates: string[] = [];
-      const rsaCandidates = 3;
+      const responseText = chatEnabled
+        ? await this.sendChatMessageText(chat, effectiveParts, onLog)
+        : await this.generateContentText(
+          ai,
+          {
+            model: this.modelId,
+            config: {
+              responseMimeType: 'application/json',
+              thinkingConfig: this.thinkingConfig,
+              ...(cachedContent
+                ? { cachedContent }
+                : { systemInstruction: { parts: [{ text: systemInstruction }] } })
+            },
+            contents: effectiveParts,
+          },
+          onLog,
+          systemInstruction
+        );
 
-      // Step 1: Generate Initial Candidates (Parallel)
-      if (onLog) onLog(`[RSA] Generating ${rsaCandidates} initial candidates...`);
+      if (onLog) onLog(`One-shot generation complete. Response length: ${responseText?.length || 0}`);
+      if (onLog && responseText) onLog(`Response preview: ${responseText.slice(0, 100).replace(/\n/g, ' ')}...`);
 
-      const candidatePromises = Array(rsaCandidates).fill(0).map((_, i) =>
-        this.generateContentText(ai, {
-          model: this.modelId,
-          contents: parts, // Same prompt for all
-          systemInstruction: { parts: [{ text: systemInstruction }] },
-          config: {
-            responseMimeType: "application/json",
-            thinkingConfig: this.thinkingConfig,
-            temperature: 0.7 + (i * 0.1) // Varied temperature for diversity
-          }
-        }, (msg) => onLog ? onLog(`[Candidate ${i + 1}] ${msg}`) : null)
-      );
+      const graphJsonParsed = utils.safeJsonParse(responseText);
+      let agentFeedback = responseText;
 
-      currentCandidates = await Promise.all(candidatePromises);
-      currentCandidates = currentCandidates.filter(c => c && c.length > 10); // Simple validation
-
-      if (currentCandidates.length === 0) {
-        throw new Error("RSA failed to generate any valid candidates.");
+      // Extract feedback summary if available in JSON
+      if (graphJsonParsed && typeof graphJsonParsed === 'object' && (graphJsonParsed as any).summary) {
+        agentFeedback = (graphJsonParsed as any).summary;
       }
 
-      // Step 2: Aggregation (Single Loop for Latency/Quality Balance)
-      if (onLog) onLog(`[RSA] Aggregating ${currentCandidates.length} candidates into final solution...`);
+      // Support new { summary, ops } format for Editor
+      let effectiveGraphJsonRaw = graphJsonParsed;
+      if (agent === 'editor' && graphJsonParsed && typeof graphJsonParsed === 'object' && Array.isArray((graphJsonParsed as any).ops)) {
+        effectiveGraphJsonRaw = (graphJsonParsed as any).ops;
+      }
 
-      // Using the official RSA aggregation prompt structure (adapted from HyperPotatoNeo/RSA/eval_loop.py)
-      const aggregationInstructions = currentCandidates.length === 1
-        ? [
-          `You are given a problem and a candidate solution.`,
-          `The candidate may be incomplete or contain errors.`,
-          `Refine this trajectory and produce an improved, higher-quality solution.`,
-          `If it is entirely wrong, attempt a new strategy.`,
-        ]
-        : [
-          `You are given a problem and several candidate solutions.`,
-          `Some candidates may be incorrect or contain errors.`,
-          `YOUR TASK: Aggregate the useful ideas ("best genes") and produce a single, high-quality solution.`,
-          `Reason carefully; if candidates disagree, choose the correct path. If all are incorrect, attempt a different strategy.`,
-        ];
-
-      const aggregationPrompt = [
-        ...aggregationInstructions,
-        `End with the complete final JSON.`,
-        ``,
-        `Problem:`,
-        `${prompt}`,
-        ``,
-        `Candidate solutions (may contain mistakes):`,
-        ...currentCandidates.map((c, i) => `---- Solution ${i + 1} ----\n${c}\n`),
-        ``,
-        `Now write a single improved solution. Provide clear reasoning and end with the final JSON.`,
-        `IMPORTANT: Output ONLY valid JSON code. No markdown fences.`
-      ].join('\n');
-
-      const responseText = await this.generateContentText(ai, {
-        model: this.modelId,
-        contents: [...mediaParts, { text: aggregationPrompt }],
-        systemInstruction: { parts: [{ text: systemInstruction }] },
-        config: {
-          responseMimeType: "application/json",
-          thinkingConfig: {
-            thinkingLevel: ThinkingLevel.HIGH,
-            includeThoughts: true
-          },
-        },
-      }, onLog);
-
-      if (onLog) onLog(`[RSA] Aggregation complete. Response length: ${responseText?.length || 0}`);
-      if (onLog && responseText) onLog(`[RSA] Response preview: ${responseText.slice(0, 100).replace(/\n/g, ' ')}...`);
-
-      const graphJson = this.safeJsonParse(responseText);
+      // If model returned ops, apply them to the current snapshot.
+      const graphJson = (effectiveGraphJsonRaw && typeof effectiveGraphJsonRaw === 'object' && Array.isArray((effectiveGraphJsonRaw as any).nodes))
+        ? effectiveGraphJsonRaw
+        : (agent === 'editor' && (Array.isArray(effectiveGraphJsonRaw) || (effectiveGraphJsonRaw && typeof effectiveGraphJsonRaw === 'object' && (effectiveGraphJsonRaw as any).action)))
+          ? utils.applyGraphOps(
+            utils.toMinimalGraphSnapshot(currentNodes, currentConnections),
+            Array.isArray(effectiveGraphJsonRaw) ? effectiveGraphJsonRaw : [effectiveGraphJsonRaw],
+            onLog
+          )
+          : (agent === 'editor'
+            ? (() => {
+              const ops = utils.safeJsonParseMany(responseText);
+              if (ops.length === 0) return effectiveGraphJsonRaw;
+              return utils.applyGraphOps(
+                utils.toMinimalGraphSnapshot(currentNodes, currentConnections),
+                ops,
+                onLog
+              );
+            })()
+            : effectiveGraphJsonRaw);
 
       // Sanitize Pass 1
-      let pass1 = this.sanitizeGraph(graphJson);
+      let pass1 = utils.sanitizeGraph(graphJson);
       let draft = pass1.graph;
 
       // Handle simple array output from model if it forgets the wrapper
       if (!draft) {
         const maybeNodes = Array.isArray(graphJson) ? graphJson : null;
         if (maybeNodes) {
-          pass1 = this.sanitizeGraph({ nodes: maybeNodes, connections: [] });
+          pass1 = utils.sanitizeGraph({ nodes: maybeNodes, connections: [] });
           draft = pass1.graph;
         }
       }
 
       if (!draft) return null;
 
-      this.logGraphSummary('Draft (Architect)', draft, onLog);
+      this.logGraphSummary('Draft (One-shot)', draft, onLog);
 
       // Report Sanitize issues
       if (onLog && pass1.report.changed) {
@@ -1333,39 +1233,8 @@ export class GeminiService {
         }
       }
 
-      // Optional: Self-Correction Loop (if sanitizer made heavy changes)
-      // For one-shot, we might skip a full second pass unless critical, but let's keep the logic 
-      // if the graph changed significantly, to allow the model to "align" with the rules it missed.
-      if (pass1.report.changed) {
-        if (onLog) onLog('Architect: Iterating with sanitizer feedback...');
-
-        const feedback = {
-          sanitizer_report: pass1.report,
-          sanitized_graph: draft,
-          instruction: 'The previous graph had structural invalidities. Re-generate the JSON fixes.'
-        };
-
-        const out2Text = await this.generateContentText(ai, {
-          model: this.modelId,
-          contents: [
-            { role: 'user', parts },
-            { role: 'model', parts: [{ text: responseText }] }, // conversation history
-            { role: 'user', parts: [{ text: `SANITIZER_FEEDBACK:\n${JSON.stringify(feedback)}` }] },
-          ],
-          config: {
-            systemInstruction: { parts: [{ text: systemInstruction }] },
-            responseMimeType: 'application/json',
-            thinkingConfig: this.thinkingConfig,
-          },
-        }, onLog);
-
-        const out2Json = this.safeJsonParse(out2Text);
-        const pass2 = this.sanitizeGraph(out2Json);
-        if (pass2.graph) {
-          draft = pass2.graph;
-          this.logGraphSummary('Draft (Correction)', draft, onLog);
-        }
-      }
+      // NOTE: intentionally no multi-attempt generation here.
+      // We do a single one-shot generation, then rely on linter + refiner for repairs.
 
       if (onUpdate) {
         onLog?.('UI Update: draft graph');
@@ -1373,11 +1242,72 @@ export class GeminiService {
       }
 
       // Lint + Refining (Phase C preserved)
-      const typedNodes = this.convertToShaderNodes(draft.nodes);
+      const typedNodes = utils.convertToShaderNodes(draft.nodes);
       const report = lintGraph(typedNodes, draft.connections as any);
       if (report.length > 0) {
         if (onLog) onLog(`Linter: ${report.length} issue(s). Attempting repair...`);
-        const fixed = await this.refineGraph(draft, report, onLog);
+        const fixed = chatEnabled
+          ? await (async () => {
+            const repairMessage = [{
+              text:
+                'FIX_GRAPH_REQUEST:\n' +
+                (agent === 'editor'
+                  ? 'Return ONLY valid JSON (no markdown). Return OPS (add/edit/delete) to fix the graph.\n\n'
+                  : 'Return ONLY valid JSON (no markdown).\n\n') +
+                'DRAFT_GRAPH_JSON:\n' +
+                JSON.stringify(draft) +
+                '\n\nLINTER_ERRORS:\n' +
+                report.join('\n')
+            }];
+            const repairedText = await this.sendChatMessageText(chat, repairMessage, onLog);
+            if (!repairedText) return draft;
+
+            const repairedParsed = utils.safeJsonParse(repairedText);
+
+            // Extract feedback from repair if available
+            if (repairedParsed && typeof repairedParsed === 'object' && (repairedParsed as any).summary) {
+              agentFeedback += "\n\nREPAIR: " + (repairedParsed as any).summary;
+            }
+
+            // Support new { summary, ops } format for Refiner Editor
+            let effectiveRepairedRaw = repairedParsed;
+            if (agent === 'editor' && repairedParsed && typeof repairedParsed === 'object' && Array.isArray((repairedParsed as any).ops)) {
+              effectiveRepairedRaw = (repairedParsed as any).ops;
+            }
+
+            const repaired = (effectiveRepairedRaw && typeof effectiveRepairedRaw === 'object' && Array.isArray((effectiveRepairedRaw as any).nodes))
+              ? effectiveRepairedRaw
+              : (agent === 'editor' && (Array.isArray(effectiveRepairedRaw) || (effectiveRepairedRaw && typeof effectiveRepairedRaw === 'object' && (effectiveRepairedRaw as any).action)))
+                ? utils.applyGraphOps(
+                  { nodes: draft.nodes, connections: draft.connections },
+                  Array.isArray(effectiveRepairedRaw) ? effectiveRepairedRaw : [effectiveRepairedRaw],
+                  onLog
+                )
+                : (agent === 'editor'
+                  ? (() => {
+                    const ops = utils.safeJsonParseMany(repairedText);
+                    if (ops.length === 0) return effectiveRepairedRaw;
+                    return utils.applyGraphOps(
+                      { nodes: draft.nodes, connections: draft.connections },
+                      ops,
+                      onLog
+                    );
+                  })()
+                  : effectiveRepairedRaw);
+
+            const sanitized = utils.sanitizeGraph(repaired);
+            if (onLog && sanitized.report.changed) {
+              onLog(`Sanitizer: ${sanitized.report.issues.join(' | ')}`);
+              if (sanitized.report.examples.length > 0) {
+                const preview = sanitized.report.examples.slice(0, 3);
+                const extra = sanitized.report.examples.length - preview.length;
+                onLog(`Sanitizer examples: ${preview.join(' | ')}${extra > 0 ? ` (+${extra} more)` : ''}`);
+              }
+              onLog(`Sanitizer final: nodes=${sanitized.report.final.nodeCount}, connections=${sanitized.report.final.connectionCount}`);
+            }
+            return sanitized.graph || draft;
+          })()
+          : await this.refineGraph(draft, report, agent, onLog);
         if (fixed) {
           draft = fixed;
           this.logGraphSummary('Draft (Refined)', draft, onLog);
@@ -1388,28 +1318,44 @@ export class GeminiService {
         }
       }
 
-      return draft;
+      // Post-Process: Inject attachment into texture nodes if missing
+      if (imageBase64 && draft.nodes) {
+        draft.nodes.forEach((n: any) => {
+          if ((n.type === 'textureAsset' || n.type === 'texture2DAsset') && !n.data?.textureAsset) {
+            if (!n.data) n.data = {};
+            n.data.textureAsset = imageBase64;
+            if (onLog) onLog(`Auto-injected attachment into ${n.id} (${n.type})`);
+          }
+        });
+      }
+
+      // Sync with Consultant
+      if (draft && draft.nodes) {
+        const changeDesc = agent === 'editor'
+          ? `Modified the graph based on user request: "${effectivePrompt}". (Diff-based ops applied)`
+          : `Generated a new graph based on user request: "${effectivePrompt}".`;
+
+        // We do this asynchronously to not block the main UI update.
+        this.notifyConsultantOfGraphChange(agent === 'editor' ? 'Graph Editor' : 'Shader Architect', changeDesc, onLog).catch(err => {
+          console.error('[Sync] Consultant sync failed:', err);
+        });
+      }
+
+      return {
+        graph: draft,
+        responseText: agentFeedback, // Use the feedback instead of raw JSON
+        meta: {
+          agent,
+          command: parsed.command,
+          usedChat: !!chatEnabled,
+          usedPersistentChat: !!(persistChat && agent === 'editor'),
+          omittedDynamicGraphContext: !!shouldOmitDynamicGraphContext,
+        },
+      };
     } catch (e) {
       if (onLog) onLog(`Generation failed: ${e}`);
       return null;
     }
-  }
-
-  private convertToShaderNodes(rawNodes: any[]): ShaderNode[] {
-    return rawNodes.map(n => {
-      const mod = getNodeModule(n.type);
-      const def = mod?.definition;
-      return {
-        id: n.id,
-        type: n.type,
-        label: def?.label || n.type,
-        x: n.x || 0,
-        y: n.y || 0,
-        inputs: def?.inputs || [],
-        outputs: def?.outputs || [],
-        data: { ...(n.data || {}), ...(n.dataValue !== undefined ? { value: n.dataValue } : {}) }
-      } as ShaderNode;
-    });
   }
 }
 

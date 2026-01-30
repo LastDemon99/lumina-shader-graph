@@ -14,9 +14,35 @@ import { NODE_LIST, getNodeModule } from './nodes';
 import { getEffectiveSockets } from './nodes/runtime';
 import { previewSystem } from './services/render/previewSystem';
 import { dispatchCommand } from './services/gemini/commands/dispatch';
-import { Wand2, Download, Upload, ZoomIn, ZoomOut, MousePointer2, Box, Square, Save, Layers, Network, CheckCircle2, Loader2, Sparkles, FileJson, AlertCircle, Plus, FilePlus, Circle, AppWindow } from 'lucide-react';
+import { Wand2, Download, Upload, ZoomIn, ZoomOut, MousePointer2, Box, Square, Save, Layers, Network, CheckCircle2, Loader2, Sparkles, FileJson, AlertCircle, Plus, FilePlus, Circle, AppWindow, Code2 } from 'lucide-react';
+import { CodeEditor } from './components/CodeEditor';
 
 const App: React.FC = () => {
+  const suppressManualHistoryRef = useRef(false);
+  const prevSnapshotRef = useRef<{ nodes: ShaderNode[]; connections: Connection[] } | null>(null);
+  const pendingOpsRef = useRef<any[]>([]);
+  const manualOpsDebounceRef = useRef<number | null>(null);
+
+  const parseBool = useCallback((value: any) => {
+    if (value === true) return true;
+    const s = String(value ?? '').trim().toLowerCase();
+    return s === '1' || s === 'true' || s === 'yes' || s === 'on';
+  }, []);
+
+  const persistentChatEnabled = useMemo(() => {
+    return parseBool((import.meta as any).env?.VITE_GEMINI_PERSIST_CHAT_SESSION ?? (import.meta.env as any)?.VITE_GEMINI_PERSIST_CHAT_SESSION);
+  }, [parseBool]);
+
+  const graphOutputMode = useMemo(() => {
+    const raw = (import.meta as any).env?.VITE_GEMINI_GRAPH_OUTPUT_MODE ?? (import.meta.env as any)?.VITE_GEMINI_GRAPH_OUTPUT_MODE;
+    const v = String(raw ?? '').trim().toLowerCase();
+    return v === 'ops' ? 'ops' : 'graph';
+  }, []);
+
+  const [lastAiMeta, setLastAiMeta] = useState<any | null>(null);
+  const [lastResponseText, setLastResponseText] = useState<string | null>(null);
+  const [lastAssistantResponse, setLastAssistantResponse] = useState<string | null>(null);
+
   const getDefinitionOrPlaceholder = useCallback((type: string) => {
     return (
       getNodeModule(type)?.definition ?? {
@@ -30,6 +56,9 @@ const App: React.FC = () => {
 
   const handleNewGraph = () => {
     if (confirm('Are you sure you want to create a new graph? Unsaved changes will be lost.')) {
+      suppressManualHistoryRef.current = true;
+      geminiService.resetPersistentGraphSession();
+      geminiService.setPersistentGraphBaseline(INITIAL_NODES, INITIAL_CONNECTIONS);
       setNodes(INITIAL_NODES);
       setConnections(INITIAL_CONNECTIONS);
       setViewport({ x: 0, y: 0, zoom: 1 });
@@ -37,11 +66,16 @@ const App: React.FC = () => {
       setFileHandle(null);
       setFileName(null);
       setIsSaved(true);
+      // allow one tick for state to settle
+      setTimeout(() => {
+        suppressManualHistoryRef.current = false;
+      }, 0);
     }
   };
 
   // --- Global State ---
-  const [activeTab, setActiveTab] = useState<'graph' | 'scene'>('graph');
+  const [activeTab, setActiveTab] = useState<'graph' | 'scene' | 'code'>('graph');
+  const [editingNodeId, setEditingNodeId] = useState<string | null>(null);
 
   // --- Graph State ---
   const [nodes, setNodes] = useState<ShaderNode[]>(INITIAL_NODES);
@@ -51,6 +85,9 @@ const App: React.FC = () => {
   // Selection State
   const [selectedNodeIds, setSelectedNodeIds] = useState<Set<string>>(new Set());
   const [selectionBox, setSelectionBox] = useState<{ startX: number, startY: number, currentX: number, currentY: number } | null>(null);
+
+  // Expert AI Focus (node attachments)
+  const [attachedNodeIds, setAttachedNodeIds] = useState<Set<string>>(new Set());
 
   // Clipboard State
   const [clipboard, setClipboard] = useState<{ nodes: ShaderNode[], connections: Connection[] } | null>(null);
@@ -71,6 +108,106 @@ const App: React.FC = () => {
   // Context Menu State
   const [contextMenu, setContextMenu] = useState<{ x: number, y: number, clientX: number, clientY: number, open: boolean } | null>(null);
   const [contextSearch, setContextSearch] = useState('');
+
+  const toggleAttachSelection = useCallback(() => {
+    const selection = Array.from(selectedNodeIds);
+    if (!selection.length) return;
+
+    setAttachedNodeIds(prev => {
+      const next = new Set(prev);
+      const allAttached = selection.every(id => next.has(id));
+      if (allAttached) {
+        selection.forEach(id => next.delete(id));
+      } else {
+        selection.forEach(id => next.add(id));
+      }
+      return next;
+    });
+  }, [selectedNodeIds]);
+
+  const clearAttachedNodes = useCallback(() => {
+    setAttachedNodeIds(new Set());
+  }, []);
+
+  const attachedNodesSummary = useMemo(() => {
+    const ids = attachedNodeIds.size ? Array.from(attachedNodeIds) : ([] as string[]);
+    if (!ids.length) return [] as Array<{ id: string; label: string; type: string }>;
+    const byId = new Map(nodes.map(n => [n.id, n] as const));
+    const resolved = ids
+      .map(id => byId.get(id))
+      .filter((n): n is (typeof nodes)[number] => Boolean(n));
+    return resolved.map(n => ({ id: n.id, label: n.label, type: n.type }));
+  }, [attachedNodeIds, nodes]);
+
+  const focusText = useMemo(() => {
+    const seedIds: string[] = attachedNodeIds.size ? Array.from(attachedNodeIds.values()) : [];
+    if (!seedIds.length) return '';
+
+    const incoming = new Map<string, Connection[]>();
+    const outgoing = new Map<string, Connection[]>();
+    for (const c of connections) {
+      if (!incoming.has(c.targetNodeId)) incoming.set(c.targetNodeId, []);
+      if (!outgoing.has(c.sourceNodeId)) outgoing.set(c.sourceNodeId, []);
+      incoming.get(c.targetNodeId)!.push(c);
+      outgoing.get(c.sourceNodeId)!.push(c);
+    }
+
+    const visited = new Set<string>(seedIds);
+    const queue: string[] = [...seedIds];
+    const MAX_NODES = 80;
+
+    while (queue.length && visited.size < MAX_NODES) {
+      const id = queue.shift()!;
+      const inc = incoming.get(id) || [];
+      const out = outgoing.get(id) || [];
+
+      for (const c of inc) {
+        if (visited.size >= MAX_NODES) break;
+        if (!visited.has(c.sourceNodeId)) {
+          visited.add(c.sourceNodeId);
+          queue.push(c.sourceNodeId);
+        }
+      }
+      for (const c of out) {
+        if (visited.size >= MAX_NODES) break;
+        if (!visited.has(c.targetNodeId)) {
+          visited.add(c.targetNodeId);
+          queue.push(c.targetNodeId);
+        }
+      }
+    }
+
+    const subNodes = nodes
+      .filter(n => visited.has(n.id))
+      .map(n => ({ id: n.id, type: n.type, label: n.label }));
+    const subConnections = connections
+      .filter(c => visited.has(c.sourceNodeId) && visited.has(c.targetNodeId))
+      .map(c => ({
+        sourceNodeId: c.sourceNodeId,
+        sourceSocketId: c.sourceSocketId,
+        targetNodeId: c.targetNodeId,
+        targetSocketId: c.targetSocketId,
+      }));
+
+    const payload = {
+      attachedNodeIds: seedIds,
+      focusMode: 'branch',
+      subgraph: { nodes: subNodes, connections: subConnections },
+    };
+
+    let json = '';
+    try {
+      json = JSON.stringify(payload);
+    } catch {
+      json = String(payload);
+    }
+
+    const clipped = json.length > 6000 ? `${json.slice(0, 6000)}…` : json;
+    return (
+      'FOCUS (expert attachments): The user attached a focused subgraph. Prefer making edits within this subgraph unless asked otherwise.\n' +
+      clipped
+    );
+  }, [attachedNodeIds, nodes, connections]);
 
 
 
@@ -439,6 +576,10 @@ const App: React.FC = () => {
       const data = JSON.parse(jsonString);
       if (data && typeof data === 'object' && Array.isArray((data as any).nodes) && Array.isArray((data as any).connections)) {
         const typedData = data as { nodes: ShaderNode[], connections: Connection[], previewMode?: '2d' | '3d' };
+
+        suppressManualHistoryRef.current = true;
+        geminiService.resetPersistentGraphSession();
+
         setViewport({ x: 0, y: 0, zoom: 1 });
         setSelectedNodeIds(new Set<string>());
 
@@ -455,6 +596,9 @@ const App: React.FC = () => {
           setNodes(typedData.nodes);
           setConnections(typedData.connections);
           setIsSaved(true);
+
+          geminiService.setPersistentGraphBaseline(typedData.nodes, typedData.connections);
+          suppressManualHistoryRef.current = false;
         }, 50);
       } else {
         alert('Invalid file format: Missing nodes or connections array.');
@@ -464,6 +608,134 @@ const App: React.FC = () => {
       alert('Failed to parse file.');
     }
   };
+
+  const toConnKey = (c: Connection) => `${c.sourceNodeId}:${c.sourceSocketId}->${c.targetNodeId}:${c.targetSocketId}`;
+
+  const diffGraphToOps = (
+    prev: { nodes: ShaderNode[]; connections: Connection[] },
+    next: { nodes: ShaderNode[]; connections: Connection[] }
+  ): any[] => {
+    const ops: any[] = [];
+
+    const prevNodesById = new Map(prev.nodes.map(n => [n.id, n] as const));
+    const nextNodesById = new Map(next.nodes.map(n => [n.id, n] as const));
+
+    // Node deletes
+    for (const [id] of prevNodesById) {
+      if (!nextNodesById.has(id)) {
+        ops.push({ action: 'delete', id });
+      }
+    }
+
+    // Node adds + edits
+    for (const [id, node] of nextNodesById) {
+      const prevNode = prevNodesById.get(id);
+      if (!prevNode) {
+        ops.push({
+          action: 'add',
+          id,
+          node_content: {
+            id: node.id,
+            type: node.type,
+            x: node.x,
+            y: node.y,
+            ...(node.data ? { data: node.data } : {}),
+          },
+        });
+        continue;
+      }
+
+      const patch: any = {};
+      if (prevNode.x !== node.x) patch.x = node.x;
+      if (prevNode.y !== node.y) patch.y = node.y;
+
+      const prevData = prevNode.data ?? {};
+      const nextData = node.data ?? {};
+      const dataPatch: any = {};
+      const keys = new Set([...Object.keys(prevData), ...Object.keys(nextData)]);
+      for (const k of keys) {
+        if ((prevData as any)[k] !== (nextData as any)[k]) {
+          dataPatch[k] = (nextData as any)[k];
+        }
+      }
+      if (Object.keys(dataPatch).length > 0) patch.data = dataPatch;
+
+      if (Object.keys(patch).length > 0) {
+        ops.push({ action: 'edit', id, node_content: patch });
+      }
+    }
+
+    // Connection diffs (add/delete)
+    const prevConnKeys = new Map(prev.connections.map(c => [toConnKey(c), c] as const));
+    const nextConnKeys = new Map(next.connections.map(c => [toConnKey(c), c] as const));
+
+    const addConns: any[] = [];
+    for (const [k, c] of nextConnKeys) {
+      if (!prevConnKeys.has(k)) {
+        addConns.push({
+          sourceNodeId: c.sourceNodeId,
+          sourceSocketId: c.sourceSocketId,
+          targetNodeId: c.targetNodeId,
+          targetSocketId: c.targetSocketId,
+          ...(c.id ? { id: c.id } : {}),
+        });
+      }
+    }
+
+    const delConns: any[] = [];
+    for (const [k, c] of prevConnKeys) {
+      if (!nextConnKeys.has(k)) {
+        delConns.push({
+          sourceNodeId: c.sourceNodeId,
+          sourceSocketId: c.sourceSocketId,
+          targetNodeId: c.targetNodeId,
+          targetSocketId: c.targetSocketId,
+          ...(c.id ? { id: c.id } : {}),
+        });
+      }
+    }
+
+    if (addConns.length > 0) {
+      ops.push({ action: 'edit', id: 'output', connection_content: addConns });
+    }
+    if (delConns.length > 0) {
+      ops.push({ action: 'edit', id: 'output', connections_delete: delConns });
+    }
+
+    return ops;
+  };
+
+  useEffect(() => {
+    // Keep a baseline for persistent chat (even if persistence is disabled, this is a no-op).
+    if (!prevSnapshotRef.current) {
+      prevSnapshotRef.current = { nodes, connections };
+      geminiService.setPersistentGraphBaseline(nodes, connections);
+      return;
+    }
+
+    const prev = prevSnapshotRef.current;
+    const next = { nodes, connections };
+    prevSnapshotRef.current = next;
+
+    if (suppressManualHistoryRef.current) return;
+
+    const ops = diffGraphToOps(prev, next);
+    if (ops.length === 0) return;
+
+    // Debounce + coalesce to avoid spamming history during drags.
+    pendingOpsRef.current.push(...ops);
+    if (manualOpsDebounceRef.current) window.clearTimeout(manualOpsDebounceRef.current);
+    manualOpsDebounceRef.current = window.setTimeout(() => {
+      const batch = pendingOpsRef.current.splice(0, pendingOpsRef.current.length);
+      if (batch.length > 0) {
+        geminiService.appendManualGraphOpsToPersistentHistory(batch, (msg: string) => {
+          setLinterLogs(prevLogs => [...prevLogs, msg]);
+        }).catch(() => {
+          // ignore
+        });
+      }
+    }, 400);
+  }, [nodes, connections]);
 
   const handleOpen = useCallback(async () => {
     let usedNative = false;
@@ -866,6 +1138,16 @@ const App: React.FC = () => {
     }));
   };
 
+  const handleOpenCodeEditor = useCallback((nodeId: string) => {
+    setEditingNodeId(nodeId);
+    setActiveTab('code');
+  }, []);
+
+  const handleSaveCode = useCallback((nodeId: string, code: string) => {
+    updateNodeData(nodeId, { code });
+    setLinterLogs(prev => [...prev, `Code updated for node ${nodeId}`]);
+  }, [updateNodeData]);
+
   const addNode = (type: NodeType, clientX?: number, clientY?: number) => {
     const mod = getNodeModule(type);
     const def = getDefinitionOrPlaceholder(type);
@@ -924,6 +1206,7 @@ const App: React.FC = () => {
   const runGeminiPipeline = async (prompt: string, attachment?: string) => {
     if (!prompt && !attachment) return;
 
+    suppressManualHistoryRef.current = true;
     setGenerationPhase('drafting');
     setLinterLogs(['Analyzing request...']);
 
@@ -967,10 +1250,23 @@ const App: React.FC = () => {
       }
     };
 
-    const draft = await geminiService.generateOrModifyGraph(prompt, nodes, connections, attachment, handleLog, handleUpdate, handleVisualRequest);
+    const result = await geminiService.generateOrModifyGraph(prompt, nodes, connections, attachment, handleLog, handleUpdate, handleVisualRequest);
+    const draft = (result as any)?.graph ?? result;
+    const responseText = (result as any)?.responseText as string | undefined;
+    const meta = (result as any)?.meta as any | undefined;
+
+    if (responseText) setLastResponseText(responseText);
+
+    if (meta) {
+      setLastAiMeta(meta);
+      if (meta.usedPersistentChat) handleLog('Chat: persistent editor session enabled.');
+      if (meta.omittedDynamicGraphContext) handleLog('Chat: using baseline/history (omitting dynamic snapshot).');
+    }
+
     if (!draft || !draft.nodes) {
       setLinterLogs(prev => [...prev, 'Failed to generate draft.']);
       setGenerationPhase('idle');
+      suppressManualHistoryRef.current = false;
       return;
     }
 
@@ -1003,7 +1299,7 @@ const App: React.FC = () => {
     await new Promise(r => requestAnimationFrame(r));
     const finalImage = previewSystem.capturePreview('output') || previewSystem.capturePreview(finalNodes[finalNodes.length - 1].id);
 
-    const refined = await geminiService.refineGraph(draft, logs, handleLog, finalImage || undefined);
+    const refined = await geminiService.refineGraph(draft, logs, meta?.agent || 'architect', handleLog, finalImage || undefined);
 
     // Choose refined version only if it is not degenerate.
     // Some refinement responses can accidentally return only the master nodes (vertex/output),
@@ -1043,6 +1339,17 @@ const App: React.FC = () => {
 
     setNodes(newNodes);
     setConnections(newConnections);
+
+    // Persisted chat lifecycle rules:
+    // - Always set baseline after an AI-applied change.
+    geminiService.setPersistentGraphBaseline(newNodes, newConnections);
+    // - If this was a "generate" (architect) run, clear the chat session so edits start fresh.
+    if (meta?.agent === 'architect' || meta?.command === 'generate') {
+      geminiService.resetPersistentGraphSession();
+      geminiService.setPersistentGraphBaseline(newNodes, newConnections);
+    }
+
+    suppressManualHistoryRef.current = false;
 
     setGenerationPhase('idle');
   };
@@ -1107,8 +1414,24 @@ const App: React.FC = () => {
   ) => {
     if (!prompt && !attachment) return;
 
+    const trimmed = String(prompt || '').trim();
+    const isSlash = trimmed.startsWith('/');
+    const effectivePrompt = (!isSlash && focusText) ? `${focusText}\n\nUSER REQUEST:\n${prompt}` : prompt;
+
+    setLastAssistantResponse(null);
+    setLastAiMeta(null);
+
+    let inferredCmd: string | undefined;
+    if (!isSlash) {
+      const intent = await geminiService.inferGlobalIntent(prompt);
+      if (intent && intent.confidence >= 0.7) {
+        setLinterLogs(prev => [...prev, `Router: inferred ${intent.command} (${Math.round(intent.confidence * 100)}% confidence)`]);
+        inferredCmd = intent.command;
+      }
+    }
+
     const handled = await dispatchCommand(
-      { prompt, attachment, chatContext, selectedAssetId },
+      { prompt: effectivePrompt, attachment, chatContext, selectedAssetId, focusText: focusText || undefined, intentCommand: inferredCmd },
       {
         geminiService,
         nodes,
@@ -1123,12 +1446,16 @@ const App: React.FC = () => {
         applyTextureDataUrlToTarget,
         runGeminiTexturePipeline,
         runGeminiPipeline,
+        onAssistantResponse: (text: string) => {
+          setLastAssistantResponse(text);
+          setLastAiMeta({ agent: 'consultant' });
+        },
       }
     );
 
     if (handled) return;
 
-    await runGeminiPipeline(prompt, attachment);
+    await runGeminiPipeline(effectivePrompt, attachment);
   };
 
   const renderConnections = () => {
@@ -1180,6 +1507,24 @@ const App: React.FC = () => {
               {fileName}.json {!isSaved && <span className="text-yellow-500 ml-1">*</span>}
             </span>
           </div>
+
+          <div className="flex items-center gap-2 ml-2">
+            {persistentChatEnabled && (
+              <div className="flex items-center gap-1 px-2 py-0.5 rounded border border-blue-900 bg-blue-950/30">
+                <Sparkles className="w-3 h-3 text-blue-300" />
+                <span className="text-[10px] font-mono text-blue-200">chat:persistent</span>
+              </div>
+            )}
+            <div className="flex items-center gap-1 px-2 py-0.5 rounded border border-gray-700 bg-black">
+              <span className="text-[10px] font-mono text-gray-300">out:{graphOutputMode}</span>
+            </div>
+            {lastAiMeta?.agent && (
+              <div className="flex items-center gap-1 px-2 py-0.5 rounded border border-gray-700 bg-black">
+                <span className="text-[10px] font-mono text-gray-300">agent:{String(lastAiMeta.agent)}</span>
+              </div>
+            )}
+          </div>
+
           <div className="flex bg-black rounded p-1 gap-1 ml-4">
             <button onClick={() => setActiveTab('graph')} className={`flex items-center gap-2 px-3 py-1 text-xs rounded transition-all ${activeTab === 'graph' ? 'bg-indigo-600 text-white shadow-lg' : 'text-gray-400 hover:text-white'}`}>
               <Network className="w-3 h-3" /> Graph Editor
@@ -1187,6 +1532,11 @@ const App: React.FC = () => {
             <button onClick={() => setActiveTab('scene')} className={`flex items-center gap-2 px-3 py-1 text-xs rounded transition-all ${activeTab === 'scene' ? 'bg-indigo-600 text-white shadow-lg' : 'text-gray-400 hover:text-white'}`}>
               <Layers className="w-3 h-3" /> 3D Scene
             </button>
+            {editingNodeId && (
+              <button onClick={() => setActiveTab('code')} className={`flex items-center gap-2 px-3 py-1 text-xs rounded transition-all ${activeTab === 'code' ? 'bg-indigo-600 text-white shadow-lg' : 'text-gray-400 hover:text-white'}`}>
+                <Code2 className="w-3 h-3" /> Code
+              </button>
+            )}
           </div>
         </div>
         <div className="flex items-center gap-2">
@@ -1203,13 +1553,18 @@ const App: React.FC = () => {
         <GeminiAssistantSidebar
           onGenerate={handleGeminiGenerate}
           generationPhase={generationPhase}
+          lastAssistantResponse={lastAssistantResponse}
           logs={linterLogs}
+          lastMeta={lastAiMeta}
+          lastResult={lastResponseText}
           assets={sessionAssets}
           onAddAsset={addSessionAsset}
           onUseAssetAsTextureNode={insertTextureAssetNodeFromAsset}
+          attachedNodes={attachedNodesSummary}
+          onClearAttachedNodes={clearAttachedNodes}
         />
 
-        <div className={`flex-1 h-full relative flex flex-col ${activeTab === 'graph' ? 'z-10' : 'z-0 invisible'}`}>
+        <div className={`flex-1 h-full relative flex flex-col ${activeTab === 'graph' ? 'z-10 flex' : 'z-0 hidden'}`}>
           <div className="absolute inset-0 w-full h-full graph-grid z-0 pointer-events-none opacity-50" />
           <GlobalCanvas />
           {/* Old AI UI Removed */}
@@ -1275,10 +1630,13 @@ const App: React.FC = () => {
                   <Node
                     node={node}
                     selected={selectedNodeIds.has(node.id)}
+                    attached={attachedNodeIds.has(node.id)}
+                    onToggleAttachSelection={toggleAttachSelection}
                     onMouseDown={handleNodeMouseDown}
                     onSocketMouseDown={handleSocketMouseDown}
                     onSocketMouseUp={handleSocketMouseUp}
                     onUpdateData={updateNodeData}
+                    onOpenEditor={handleOpenCodeEditor}
                     allNodes={nodes}
                     allConnections={connections}
                   />
@@ -1338,8 +1696,15 @@ const App: React.FC = () => {
             )}
           </div>
         </div>
-        <div className={`w-full h-full absolute inset-0 bg-[#0a0a0a] ${activeTab === 'scene' ? 'z-10' : 'z-0 invisible'}`}>
+        <div className={`flex-1 h-full relative bg-[#0a0a0a] ${activeTab === 'scene' ? 'z-10 flex' : 'z-0 hidden'}`}>
           <SceneView fragShader={fragShader} vertShader={vertShader} active={activeTab === 'scene'} textures={textureUniforms} />
+        </div>
+        <div className={`flex-1 h-full relative bg-[#0a0a0a] flex ${activeTab === 'code' ? 'z-10' : 'z-0 hidden'}`}>
+          <CodeEditor
+            node={nodes.find(n => n.id === editingNodeId) || null}
+            onSave={handleSaveCode}
+            onClose={() => setActiveTab('graph')}
+          />
         </div>
       </div>
       {/* Fullscreen Overlay Disabled for Dev Mode

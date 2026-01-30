@@ -90,7 +90,7 @@ export interface UiSectionSpec {
 }
 
 export interface NodeUiSpec {
-  width?: 'normal' | 'wide';
+  width?: 'normal' | 'wide' | 'extraWide';
   preview?: {
     enabled: boolean;
   };

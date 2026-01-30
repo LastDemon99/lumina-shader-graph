@@ -8,7 +8,7 @@ import { ShaderNode, SocketType, Connection, GradientStop } from '../types';
 import { Preview } from './Preview';
 import { generateGLSL } from '../services/render/glslGenerator';
 import { processTextureFile, createTextureAtlas } from '../services/render/textureUtils';
-import { Upload, ArrowRight, Box, Square, CheckSquare, Square as SquareIcon, Image as ImageIcon, Loader2, Plus, X, ChevronDown, Check, ChevronUp, Layers, ChevronRight, Trash2, Circle, AppWindow } from 'lucide-react';
+import { Upload, ArrowRight, Box, Square, CheckSquare, Square as SquareIcon, Image as ImageIcon, Loader2, Plus, X, ChevronDown, Check, ChevronUp, Layers, ChevronRight, Trash2, Circle, AppWindow, Paperclip } from 'lucide-react';
 import { getNodeModule } from '../nodes';
 import { getEffectiveSockets } from '../nodes/runtime';
 import { NodeModuleUI } from './NodeModuleUI';
@@ -16,10 +16,13 @@ import { NodeModuleUI } from './NodeModuleUI';
 interface NodeProps {
     node: ShaderNode;
     selected: boolean;
+    attached?: boolean;
+    onToggleAttachSelection?: () => void;
     onMouseDown: (e: React.MouseEvent, id: string) => void;
     onSocketMouseDown: (e: React.MouseEvent, nodeId: string, socketId: string, isInput: boolean, type: SocketType) => void;
     onSocketMouseUp: (e: React.MouseEvent, nodeId: string, socketId: string, isInput: boolean, type: SocketType) => void;
     onUpdateData: (id: string, data: any) => void;
+    onOpenEditor?: (id: string) => void;
     allNodes: ShaderNode[];
     allConnections: Connection[];
 }
@@ -72,6 +75,8 @@ const ThrottledColorInput: React.FC<{ value: string; onChange: (val: string) => 
     return (
         <input
             type="color"
+            id={`color-input-${Math.random().toString(36).substr(2, 9)}`}
+            name="throttled-color"
             className="absolute -top-2 -left-2 w-[200%] h-[200%] cursor-pointer p-0 m-0"
             value={localValue}
             onChange={handleChange}
@@ -83,10 +88,13 @@ const ThrottledColorInput: React.FC<{ value: string; onChange: (val: string) => 
 export const Node: React.FC<NodeProps> = ({
     node,
     selected,
+    attached,
+    onToggleAttachSelection,
     onMouseDown,
     onSocketMouseDown,
     onSocketMouseUp,
     onUpdateData,
+    onOpenEditor,
     allNodes,
     allConnections
 }) => {
@@ -358,6 +366,7 @@ export const Node: React.FC<NodeProps> = ({
             else if (socketId === 'contrast') fallback = 1.0;
             else if (socketId === 'amplitude') fallback = 1.0; // UPDATED: Match new scale (1.0 = 0.1)
             else if (socketId === 'scale') fallback = 1.0; // Noise scale usually > 0
+            else if (socketId === 'alpha') fallback = 1.0; // Alpha defaults to opaque
             else if (['multiply', 'divide', 'power'].includes(node.type) && socketId === 'b') fallback = 1;
 
             const defaultVal = val !== undefined ? val : fallback;
@@ -366,6 +375,8 @@ export const Node: React.FC<NodeProps> = ({
                 <div className="flex items-center bg-[#0a0a0a] rounded border border-gray-800 focus-within:border-blue-500 transition-colors nodrag">
                     <input
                         type="number"
+                        id={`input-${node.id}-${socketId}`}
+                        name={`${node.id}-${socketId}`}
                         step="0.01"
                         className="w-12 h-4 bg-transparent text-[9px] text-gray-300 px-1 outline-none text-right"
                         value={defaultVal}
@@ -380,6 +391,8 @@ export const Node: React.FC<NodeProps> = ({
             return (
                 <div className="nodrag">
                     <select
+                        id={`select-${node.id}-${socketId}`}
+                        name={`${node.id}-${socketId}`}
                         className="bg-[#0a0a0a] text-[9px] text-gray-300 border border-gray-800 rounded h-4 outline-none nodrag cursor-pointer"
                         value={val || 'UV0'}
                         onChange={(e) => handleInputChange(socketId, e.target.value)}
@@ -399,6 +412,8 @@ export const Node: React.FC<NodeProps> = ({
                         <span className="text-[8px] text-red-400 pl-1 select-none font-bold w-2">X</span>
                         <input
                             type="number" step="0.1"
+                            id={`input-${node.id}-${socketId}-x`}
+                            name={`${node.id}-${socketId}-x`}
                             className="w-10 h-3.5 bg-transparent text-[9px] text-gray-300 px-1 outline-none text-right"
                             value={vec.x}
                             onChange={(e) => handleVec2Change(socketId, 'x', e.target.value)}
@@ -409,6 +424,8 @@ export const Node: React.FC<NodeProps> = ({
                         <span className="text-[8px] text-green-400 pl-1 select-none font-bold w-2">Y</span>
                         <input
                             type="number" step="0.1"
+                            id={`input-${node.id}-${socketId}-y`}
+                            name={`${node.id}-${socketId}-y`}
                             className="w-10 h-3.5 bg-transparent text-[9px] text-gray-300 px-1 outline-none text-right"
                             value={vec.y}
                             onChange={(e) => handleVec2Change(socketId, 'y', e.target.value)}
@@ -427,6 +444,8 @@ export const Node: React.FC<NodeProps> = ({
                         <span className="text-[8px] text-red-400 pl-1 select-none font-bold w-2">X</span>
                         <input
                             type="number" step="0.1"
+                            id={`input-${node.id}-${socketId}-x`}
+                            name={`${node.id}-${socketId}-x`}
                             className="w-10 h-3.5 bg-transparent text-[9px] text-gray-300 px-1 outline-none text-right"
                             value={vec.x}
                             onChange={(e) => handleVec3Change(socketId, 'x', e.target.value)}
@@ -437,6 +456,8 @@ export const Node: React.FC<NodeProps> = ({
                         <span className="text-[8px] text-green-400 pl-1 select-none font-bold w-2">Y</span>
                         <input
                             type="number" step="0.1"
+                            id={`input-${node.id}-${socketId}-y`}
+                            name={`${node.id}-${socketId}-y`}
                             className="w-10 h-3.5 bg-transparent text-[9px] text-gray-300 px-1 outline-none text-right"
                             value={vec.y}
                             onChange={(e) => handleVec3Change(socketId, 'y', e.target.value)}
@@ -447,6 +468,8 @@ export const Node: React.FC<NodeProps> = ({
                         <span className="text-[8px] text-blue-400 pl-1 select-none font-bold w-2">Z</span>
                         <input
                             type="number" step="0.1"
+                            id={`input-${node.id}-${socketId}-z`}
+                            name={`${node.id}-${socketId}-z`}
                             className="w-10 h-3.5 bg-transparent text-[9px] text-gray-300 px-1 outline-none text-right"
                             value={vec.z}
                             onChange={(e) => handleVec3Change(socketId, 'z', e.target.value)}
@@ -465,6 +488,8 @@ export const Node: React.FC<NodeProps> = ({
                         <span className="text-[8px] text-red-400 pl-1 select-none font-bold w-2">X</span>
                         <input
                             type="number" step="0.1"
+                            id={`input-${node.id}-${socketId}-x`}
+                            name={`${node.id}-${socketId}-x`}
                             className="w-10 h-3.5 bg-transparent text-[9px] text-gray-300 px-1 outline-none text-right"
                             value={vec.x}
                             onChange={(e) => handleVec4Change(socketId, 'x', e.target.value)}
@@ -475,6 +500,8 @@ export const Node: React.FC<NodeProps> = ({
                         <span className="text-[8px] text-green-400 pl-1 select-none font-bold w-2">Y</span>
                         <input
                             type="number" step="0.1"
+                            id={`input-${node.id}-${socketId}-y`}
+                            name={`${node.id}-${socketId}-y`}
                             className="w-10 h-3.5 bg-transparent text-[9px] text-gray-300 px-1 outline-none text-right"
                             value={vec.y}
                             onChange={(e) => handleVec4Change(socketId, 'y', e.target.value)}
@@ -485,6 +512,8 @@ export const Node: React.FC<NodeProps> = ({
                         <span className="text-[8px] text-blue-400 pl-1 select-none font-bold w-2">Z</span>
                         <input
                             type="number" step="0.1"
+                            id={`input-${node.id}-${socketId}-z`}
+                            name={`${node.id}-${socketId}-z`}
                             className="w-10 h-3.5 bg-transparent text-[9px] text-gray-300 px-1 outline-none text-right"
                             value={vec.z}
                             onChange={(e) => handleVec4Change(socketId, 'z', e.target.value)}
@@ -495,6 +524,8 @@ export const Node: React.FC<NodeProps> = ({
                         <span className="text-[8px] text-gray-400 pl-1 select-none font-bold w-2">W</span>
                         <input
                             type="number" step="0.1"
+                            id={`input-${node.id}-${socketId}-w`}
+                            name={`${node.id}-${socketId}-w`}
                             className="w-10 h-3.5 bg-transparent text-[9px] text-gray-300 px-1 outline-none text-right"
                             value={vec.w}
                             onChange={(e) => handleVec4Change(socketId, 'w', e.target.value)}
@@ -541,13 +572,17 @@ export const Node: React.FC<NodeProps> = ({
 
     const handleHeaderDoubleClick = (e: React.MouseEvent) => {
         e.stopPropagation();
-        onUpdateData(node.id, { nodeCollapsed: !isNodeCollapsed });
+        if (node.type === 'customFunction' && onOpenEditor) {
+            onOpenEditor(node.id);
+        } else {
+            onUpdateData(node.id, { nodeCollapsed: !isNodeCollapsed });
+        }
     };
 
     return (
         <div
             id={`node-${node.id}`}
-            className={`absolute ${isWide ? 'w-60' : 'w-44'} rounded-lg shadow-xl border ${selected ? 'border-blue-500 shadow-blue-500/30' : 'border-[#111]'} bg-[#1e1e1e] flex flex-col z-auto`}
+            className={`absolute ${isExtraWide ? 'w-80' : (isWide ? 'w-60' : 'w-44')} rounded-lg shadow-xl border ${selected ? 'border-blue-500 shadow-blue-500/30' : 'border-[#111]'} bg-[#1e1e1e] flex flex-col z-auto`}
             style={{ left: node.x, top: node.y }}
         >
             {/* Header */}
@@ -557,6 +592,20 @@ export const Node: React.FC<NodeProps> = ({
                 onDoubleClick={handleHeaderDoubleClick}
             >
                 <span className="text-[11px] font-semibold text-gray-100 flex-1 truncate">{node.label}</span>
+
+                {selected && onToggleAttachSelection && (
+                    <button
+                        className={`text-white/60 hover:text-white p-0.5 rounded nodrag ${attached ? 'bg-white/15' : ''}`}
+                        onClick={(e) => {
+                            e.stopPropagation();
+                            onToggleAttachSelection();
+                        }}
+                        title={attached ? 'Detach selection from AI focus' : 'Attach selection to AI focus'}
+                        onMouseDown={e => e.stopPropagation()}
+                    >
+                        <Paperclip className={`w-3.5 h-3.5 ${attached ? 'text-indigo-100' : 'text-white/70'}`} />
+                    </button>
+                )}
 
                 <button
                     className="text-white/50 hover:text-white p-0.5 rounded nodrag ml-auto"

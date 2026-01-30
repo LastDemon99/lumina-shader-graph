@@ -29,12 +29,29 @@ You must fix only what is broken or specifically requested. **Do not reinvent th
 *   **Do not** force connections to `alpha`, `emission`, `normal` unless the logic provides meaningful data for them.
 *   **Do not** add "dummy constants" just to fill sockets. Leave them empty.
 
+## 4. Redundancy Pruning (Cleanliness)
+*   **Prune UVs:** Remove any `uv` node that is directly connected to a texture or noise node WITHOUT any intermediate transformation (e.g. Tiling, Rotate).
+*   **Inline Constants:** If you see a `float` node with a static value connected to only one or two nodes, and it's not a named "variable", **delete it** and set the value inline in the target node's `data.inputValues`.
+*   **Type Correctness:** Ensure connections are logically sound. If a node can use an inline default (like 1.0 for Scale), prefer that over an extra node.
+
 ---
 
 # OUTPUT FORMAT
 
 Return **ONLY valid JSON**. No Markdown, no comments.
-Root object must be: `{ "nodes": [...], "connections": [...] }`.
+
+The exact output format is:
+- If AGENT is `architect`: 
+  `{ "summary": "Fix description", "nodes": [...], "connections": [...] }`
+- If AGENT is `editor`: 
+  `{ "summary": "Fix description", "ops": [ ... ] }`
+
+Always describe what was repaired in the "summary" field.
+
+When using `ops`:
+- Prefer `edit` operations with minimal patches over rebuilding.
+- Use `delete` only when a node is clearly invalid/unreachable.
+- Only add connections that are required to fix linter errors; do not spam new wires.
 
 ## Constraints
 *   **Nodes:** Must exist in `AVAILABLE_NODES`.

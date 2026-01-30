@@ -112,20 +112,23 @@ The UI must be consistent and performant.
     *   Maintains the "Single Source of Truth" of the graph (`nodes`, `connections`).
     *   Calculates and distributes the texture map (`textureUniforms`) including Sampler configuration.
 
-## 4. AI and Validation Services (Lumina Brain)
+4. AI and Validation Services (Lumina Brain)
 
-The "AI Assist" functionality is not a simple API call; it's a structured pipeline.
+The "AI Assist" functionality is a structured multi-agent pipeline orchestrated by `services/geminiService.ts`.
 
 1.  **Orchestrator (`services/geminiService.ts`):**
-    *   Implements the implicit **Chain-of-Thought** pattern.
-    *   **Primary Model:** MUST use `gemini-3-flash-preview` (AI-3-Flash) for its advanced reasoning and speed.
-    *   **Thinking Mode:** Always enabled via `thinkingConfig: { includeThoughts: true }` to capture the reasoning process.
-    *   **Phase 1 (Drafting):** Interprets the user's prompt and generates a raw JSON of the graph.
-    *   **Phase 2 (Refining):** Receives the Linter report and fixes connection errors or isolated nodes.
+    *   **Agent Selection:** Automatically routes requests to the appropriate agent:
+        *   **Creator Agent (Architect):** For "Create" requests or empty graphs. Uses a ONE-SHOT approach to generate a full graph JSON structure.
+        *   **Editor Agent (Ops):** For "Edit" requests on existing graphs. Uses a persistent CHAT SESSION and outputs "Graph Ops" (Add/Edit/Delete) instead of full JSON to save tokens and maintain state.
+    *   **Refinement Loop:** The Creator output is passed to a **Refiner Agent** which checks against the Linter to fix hallucinations or structural errors before applying to the UI.
+    *   **Caching & Sessions:**
+        *   **Explicit Cache:** Uses Gemini's caching API to store the system context (node definitions) for faster and cheaper subsequent calls.
+        *   **Persistent Chat:** The Editor maintains a chat history to understand references like "change that color" or "connect the previous node".
 
 2.  **Validator (`services/linter.ts`):**
     *   Analyzes the structural integrity of the graph.
     *   Detects cycles, orphaned nodes, and missing Masters.
+    *   Acts as the "Compiler" feedback loop for the AI Refiner.
 
 ## 5. Node Architecture (Strict Modularity)
 

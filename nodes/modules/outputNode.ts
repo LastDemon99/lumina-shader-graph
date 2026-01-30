@@ -21,6 +21,11 @@ export const outputNode: NodeModule = {
     sections: [],
     preview: { enabled: false },
   },
+  initialData: () => ({
+    inputValues: {
+      alpha: 1,
+    },
+  }),
   metadata: {
     isMasterNode: true,
   },

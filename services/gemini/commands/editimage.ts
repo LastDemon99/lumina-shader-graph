@@ -1,14 +1,16 @@
 import type { CommandContext, CommandInvocation } from './types';
 import { findAssetByKey } from '../utils';
 
-export const matchEditAsset = (prompt: string) => String(prompt || '').trim().match(/^\/(editasset|edit)\b/i);
+export const matchEditImage = (prompt: string) => String(prompt || '').trim().match(/^\/editimage\b/i);
 
-export async function runEditAsset(inv: CommandInvocation, ctx: CommandContext): Promise<boolean> {
-  const m = String(inv.prompt || '').trim().match(/^\/(editasset|edit)\s+([\s\S]+)$/i);
+export async function runEditImage(inv: CommandInvocation, ctx: CommandContext): Promise<boolean> {
+  const m = String(inv.prompt || '').trim().match(/^\/editimage\s+([\s\S]+)$/i);
   if (!m) return false;
 
-  const rest = String(m[2] || '').trim();
+  const rest = String(m[1] || '').trim();
   if (!rest) return true;
+
+  const focusPrefix = inv.focusText ? `${inv.focusText}\n\n` : '';
 
   const parts = rest.split(/\s+/);
   const maybeKey = parts[0];
@@ -34,7 +36,7 @@ export async function runEditAsset(inv: CommandInvocation, ctx: CommandContext):
 
     try {
       const inferred = await ctx.geminiService.inferEditAssetTarget(
-        rest,
+        `${focusPrefix}${rest}`,
         ctx.sessionAssets.map(a => ({ id: a.id, name: a.name })),
         inv.chatContext,
         handleLog
@@ -65,7 +67,7 @@ export async function runEditAsset(inv: CommandInvocation, ctx: CommandContext):
   const handleLog = (msg: string) => ctx.setLinterLogs(prev => [...prev, msg]);
 
   try {
-    const edited = await ctx.geminiService.editTextureDataUrl(instructions, selected.dataUrl, handleLog);
+    const edited = await ctx.geminiService.editTextureDataUrl(`${focusPrefix}${instructions}`, selected.dataUrl, handleLog);
     if (!edited?.dataUrl) {
       handleLog('EditAsset: edit failed.');
       return true;

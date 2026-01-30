@@ -9,15 +9,10 @@ export type CommandContext = {
       chatContext?: ChatContextItem[],
       onLog?: (msg: string) => void
     ) => Promise<{ assetId: string } | null>;
-    inferAssetRequest: (userPrompt: string, onLog?: (msg: string) => void) => Promise<{
-      assetName: string;
-      apply: boolean;
-      applyPlan?: {
-        target: { nodeId: string; socketId: string };
-        operation: ApplyTextureOperation;
-        channel: ApplyTextureChannel;
-      };
-    } | null>;
+    inferLoadAssetIntent: (
+      userPrompt: string,
+      onLog?: (msg: string) => void
+    ) => Promise<{ apply: boolean } | null>;
     inferTextureRequest: (userPrompt: string, onLog?: (msg: string) => void) => Promise<{
       imagePrompt: string;
       target: { nodeId: string; socketId: string };
@@ -29,6 +24,14 @@ export type CommandContext = {
       sourceImageDataUrl: string,
       onLog?: (msg: string) => void
     ) => Promise<{ dataUrl: string; mimeType: string; text?: string } | null>;
+    askQuestion: (
+      prompt: string,
+      currentNodes?: ShaderNode[],
+      currentConnections?: Connection[],
+      attachedNodes?: Array<{ id: string; label: string; type: string }>,
+      onLog?: (msg: string) => void
+    ) => Promise<string | null>;
+    inferGlobalIntent: (prompt: string, onLog?: (msg: string) => void) => Promise<{ command: string; confidence: number } | null>;
   };
 
   nodes: ShaderNode[];
@@ -55,6 +58,7 @@ export type CommandContext = {
 
   runGeminiTexturePipeline: (texturePrompt: string, referenceAttachment?: string) => Promise<void>;
   runGeminiPipeline: (prompt: string, attachment?: string) => Promise<void>;
+  onAssistantResponse?: (text: string) => void;
 };
 
 export type CommandInvocation = {
@@ -62,4 +66,6 @@ export type CommandInvocation = {
   attachment?: string;
   chatContext?: ChatContextItem[];
   selectedAssetId?: string;
+  focusText?: string;
+  intentCommand?: string;
 };

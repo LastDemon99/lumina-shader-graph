@@ -38,6 +38,8 @@ const ThrottledColorInput: React.FC<{ value: string; onChange: (val: string) => 
   return (
     <input
       type="color"
+      id={`v-color-${Math.random().toString(36).substr(2, 9)}`}
+      name="v-color"
       className="absolute -top-2 -left-2 w-[200%] h-[200%] cursor-pointer p-0 m-0"
       value={localValue}
       onChange={handleChange}
@@ -134,6 +136,8 @@ export const NodeModuleUI: React.FC<NodeModuleUIProps> = ({ ui, node, allConnect
           <span className="text-[10px] text-gray-500 mr-2 font-mono">{control.label}</span>
           <input
             type="number"
+            id={`ui-${node.id}-${control.id}`}
+            name={`${node.id}-${control.id}`}
             className="w-full h-6 bg-transparent text-[10px] text-white outline-none"
             step={control.number?.step ?? 0.01}
             min={control.number?.min}
@@ -167,6 +171,8 @@ export const NodeModuleUI: React.FC<NodeModuleUIProps> = ({ ui, node, allConnect
         <div className="w-full h-6 rounded border border-gray-700 bg-[#0a0a0a] flex items-center px-1 nodrag">
           <span className="text-[9px] text-gray-500 mr-2">{control.label}</span>
           <select
+            id={`ui-select-${node.id}-${control.id}`}
+            name={`${node.id}-${control.id}`}
             className="bg-[#0a0a0a] text-[10px] text-white w-full outline-none border-none cursor-pointer"
             value={value ?? ''}
             onChange={(e) => setBoundValue(node, onUpdateData, bindTarget, boundKey, e.target.value)}
@@ -266,6 +272,8 @@ export const NodeModuleUI: React.FC<NodeModuleUIProps> = ({ ui, node, allConnect
           <div className="flex items-center gap-2">
             <input
               type="range"
+              id={`ui-range-${node.id}-${control.id}`}
+              name={`${node.id}-${control.id}`}
               min={min}
               max={max}
               step={control.range?.step ?? 0.01}
@@ -277,6 +285,8 @@ export const NodeModuleUI: React.FC<NodeModuleUIProps> = ({ ui, node, allConnect
             <div className="w-10 bg-[#0a0a0a] border border-gray-700 rounded px-1 flex items-center">
               <input
                 type="number"
+                id={`ui-val-${node.id}-${control.id}`}
+                name={`${node.id}-${control.id}-val`}
                 step={control.range?.step ?? 0.01}
                 className="w-full h-5 bg-transparent text-[10px] text-white outline-none text-right"
                 value={numericValue}

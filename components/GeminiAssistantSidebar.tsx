@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Send, Paperclip, Mic, X, ChevronLeft, ChevronRight, Sparkles, Image as ImageIcon, Loader2, Play } from 'lucide-react';
+import { Send, Paperclip, Mic, X, ChevronLeft, ChevronRight, Sparkles, Image as ImageIcon, Loader2, Play, Plus, Network, Wand2, FilePlus, Settings } from 'lucide-react';
 
 export interface SessionAsset {
     id: string;
@@ -14,11 +14,52 @@ interface Message {
     role: 'user' | 'assistant' | 'system';
     content: string;
     attachment?: string; // Base64
+    attachedNodes?: Array<{ id: string; label: string; type: string }>;
     debug?: {
         thoughts: string[];
         logs: string[];
+        agent?: string;
+        result?: string;
     };
 }
+
+const ASSISTANT_COMMANDS = [
+    {
+        name: '/generategraph',
+        description: 'New graph (Architect mode)',
+        icon: <Sparkles className="w-4 h-4 text-indigo-400" />
+    },
+    {
+        name: '/editgraph',
+        description: 'Modify graph (Incremental mode)',
+        icon: <Network className="w-4 h-4 text-emerald-500" />
+    },
+    {
+        name: '/loadimage',
+        description: 'Load an image as an asset',
+        icon: <FilePlus className="w-4 h-4 text-blue-400" />
+    },
+    {
+        name: '/editimage',
+        description: 'Modify an image using AI',
+        icon: <Settings className="w-4 h-4 text-pink-400" />
+    },
+    {
+        name: '/generateimage',
+        description: 'Create a new AI texture',
+        icon: <Wand2 className="w-4 h-4 text-purple-400" />
+    },
+    {
+        name: '/ask',
+        description: 'Ask about shaders or Lumina',
+        icon: <Mic className="w-4 h-4 text-orange-400" />
+    },
+    {
+        name: '/clear',
+        description: 'Reset history & attachments',
+        icon: <X className="w-4 h-4 text-red-500" />
+    },
+];
 
 interface GeminiAssistantSidebarProps {
     onGenerate: (
@@ -29,19 +70,30 @@ interface GeminiAssistantSidebarProps {
     ) => void;
     generationPhase: 'idle' | 'drafting' | 'linting' | 'refining';
     logs: string[];
+    lastAssistantResponse?: string | null;
+    lastMeta?: any;
+    lastResult?: string | null;
 
     assets: SessionAsset[];
     onAddAsset: (dataUrl: string, suggestedName?: string) => void;
     onUseAssetAsTextureNode: (assetId: string) => void;
+
+    attachedNodes?: Array<{ id: string; label: string; type: string }>;
+    onClearAttachedNodes?: () => void;
 }
 
 export const GeminiAssistantSidebar: React.FC<GeminiAssistantSidebarProps> = ({
     onGenerate,
     generationPhase,
     logs,
+    lastAssistantResponse,
+    lastMeta,
+    lastResult,
     assets,
     onAddAsset,
     onUseAssetAsTextureNode,
+    attachedNodes,
+    onClearAttachedNodes,
 }) => {
     const phaseLabel =
         generationPhase === 'drafting'
@@ -101,8 +153,13 @@ export const GeminiAssistantSidebar: React.FC<GeminiAssistantSidebarProps> = ({
                 {
                     id: `run-${Date.now()}`,
                     role: 'assistant',
-                    content: 'Done. Graph updated. Open Debug to inspect logs/thoughts.',
-                    debug: { thoughts, logs: normalLogs },
+                    content: lastAssistantResponse || 'Done. Graph updated. Open Debug to inspect logs/thoughts.',
+                    debug: {
+                        thoughts,
+                        logs: normalLogs,
+                        agent: lastMeta?.agent,
+                        result: lastResult || undefined,
+                    },
                 }
             ]);
 
@@ -126,6 +183,26 @@ export const GeminiAssistantSidebar: React.FC<GeminiAssistantSidebarProps> = ({
     const [isRecording, setIsRecording] = useState(false);
     const mediaRecorderRef = useRef<MediaRecorder | null>(null);
     const audioChunksRef = useRef<Blob[]>([]);
+
+    // Autocomplete State
+    const [showCommands, setShowCommands] = useState(false);
+    const [commandFilter, setCommandFilter] = useState('');
+    const [selectedCommandIndex, setSelectedCommandIndex] = useState(0);
+
+    const filteredCommands = ASSISTANT_COMMANDS.filter(cmd =>
+        cmd.name.toLowerCase().startsWith(commandFilter.toLowerCase())
+    );
+
+    useEffect(() => {
+        if (prompt.startsWith('/')) {
+            const part = prompt.split(/\s+/)[0];
+            setCommandFilter(part);
+            setShowCommands(filteredCommands.length > 0 && prompt.length === part.length);
+            setSelectedCommandIndex(0);
+        } else {
+            setShowCommands(false);
+        }
+    }, [prompt]);
 
     const startRecording = async () => {
         try {
@@ -178,13 +255,38 @@ export const GeminiAssistantSidebar: React.FC<GeminiAssistantSidebarProps> = ({
             }
         }
 
+        if (finalPrompt.trim().toLowerCase() === '/clear') {
+            setMessages([
+                {
+                    id: 'welcome',
+                    role: 'assistant',
+                    content: 'History cleared. How can I help you now?'
+                }
+            ]);
+            setAttachment(null);
+            onClearAttachedNodes?.();
+            setPrompt('');
+            return;
+        }
+
+        const trimmedPrompt = finalPrompt.trim().toLowerCase();
+        if (trimmedPrompt.startsWith('/loadimage') && !finalAttachment) {
+            fileInputRef.current?.click();
+            return;
+        }
+
         if ((!finalPrompt.trim() && !finalAttachment) || generationPhase !== 'idle') return;
+
+        const attachedSnapshot = (attachedNodes && attachedNodes.length)
+            ? attachedNodes.map(n => ({ id: n.id, label: n.label, type: n.type }))
+            : undefined;
 
         const newMessage: Message = {
             id: Date.now().toString(),
             role: 'user',
             content: finalPrompt,
-            attachment: finalAttachment || undefined
+            attachment: finalAttachment || undefined,
+            attachedNodes: attachedSnapshot,
         };
 
         setMessages(prev => [...prev, newMessage]);
@@ -201,6 +303,30 @@ export const GeminiAssistantSidebar: React.FC<GeminiAssistantSidebarProps> = ({
     };
 
     const handleKeyDown = (e: React.KeyboardEvent) => {
+        if (showCommands) {
+            if (e.key === 'ArrowUp') {
+                e.preventDefault();
+                setSelectedCommandIndex(prev => (prev > 0 ? prev - 1 : filteredCommands.length - 1));
+                return;
+            }
+            if (e.key === 'ArrowDown') {
+                e.preventDefault();
+                setSelectedCommandIndex(prev => (prev < filteredCommands.length - 1 ? prev + 1 : 0));
+                return;
+            }
+            if (e.key === 'Enter' || e.key === 'Tab') {
+                e.preventDefault();
+                const cmd = filteredCommands[selectedCommandIndex].name;
+                setPrompt(cmd + ' ');
+                setShowCommands(false);
+                return;
+            }
+            if (e.key === 'Escape') {
+                setShowCommands(false);
+                return;
+            }
+        }
+
         if (e.key === 'Enter' && !e.shiftKey) {
             e.preventDefault();
             handleSend();
@@ -392,15 +518,15 @@ export const GeminiAssistantSidebar: React.FC<GeminiAssistantSidebarProps> = ({
                                         <div className="mt-2 grid grid-cols-2 gap-2">
                                             <button
                                                 className="w-full text-xs px-2 py-1 rounded bg-indigo-600 hover:bg-indigo-500 text-white"
-                                                onClick={() => primeChatWithAssetCommand(a, `/useasset `)}
-                                                title="Attach this asset and prep /useasset to apply it to the graph"
+                                                onClick={() => primeChatWithAssetCommand(a, `/useimage `)}
+                                                title="Attach this asset and prep prompt to apply it to the graph"
                                             >
                                                 Use
                                             </button>
                                             <button
                                                 className="w-full text-xs px-2 py-1 rounded bg-gray-800 hover:bg-gray-700 text-gray-100 border border-gray-700"
-                                                onClick={() => primeChatWithAssetCommand(a, `/editasset `)}
-                                                title="Attach this asset and prep /editasset to edit it"
+                                                onClick={() => primeChatWithAssetCommand(a, `/editimage `)}
+                                                title="Attach this asset and prep /editimage to edit it"
                                             >
                                                 Edit
                                             </button>
@@ -413,210 +539,305 @@ export const GeminiAssistantSidebar: React.FC<GeminiAssistantSidebarProps> = ({
                 </div>
             ) : (
                 <>
-            {/* Chat Area */}
-            <div className="flex-1 overflow-y-auto p-4 space-y-4 scrollbar-thin scrollbar-thumb-gray-700">
-                {messages.map(msg => (
-                    <div key={msg.id} className={`flex flex-col ${msg.role === 'user' ? 'items-end' : 'items-start'}`}>
-                        <div className={`max-w-[90%] rounded-xl p-3 text-xs md:text-sm ${msg.role === 'user'
-                            ? 'bg-indigo-600 text-white rounded-br-none'
-                            : 'bg-[#2a2a2a] text-gray-200 border border-gray-700 rounded-bl-none'
-                            }`}>
-                            {msg.attachment && (
-                                <div className="mb-2 relative rounded overflow-hidden border border-white/20 bg-black/40 p-1">
-                                    {msg.attachment.startsWith('data:image/') ? (
-                                        <img src={msg.attachment} alt="Attachment" className="max-w-full h-auto max-h-32 object-cover" />
-                                    ) : msg.attachment.startsWith('data:video/') ? (
-                                        <video src={msg.attachment} controls className="max-w-full h-auto max-h-32" />
-                                    ) : msg.attachment.startsWith('data:audio/') ? (
-                                        <audio src={msg.attachment} controls className="w-full h-8" />
-                                    ) : msg.attachment.startsWith('http') ? (
-                                        <div className="flex items-center gap-2 p-2 overflow-hidden bg-red-900/20">
-                                            <Play className="w-4 h-4 text-red-500 shrink-0" />
-                                            <span className="truncate text-[10px] text-gray-300 font-mono">{msg.attachment}</span>
-                                        </div>
-                                    ) : (
-                                        <div className="flex items-center gap-2 p-2 overflow-hidden">
-                                            <Paperclip className="w-4 h-4 text-indigo-400 shrink-0" />
-                                            <span className="truncate text-[10px] text-gray-400">{msg.attachment.split(';')[0]}</span>
+                    {/* Chat Area */}
+                    <div className="flex-1 overflow-y-auto p-4 space-y-4 scrollbar-thin scrollbar-thumb-gray-700">
+                        {messages.map(msg => (
+                            <div key={msg.id} className={`flex flex-col ${msg.role === 'user' ? 'items-end' : 'items-start'}`}>
+                                <div className={`max-w-[90%] rounded-xl p-3 text-xs md:text-sm ${msg.role === 'user'
+                                    ? 'bg-indigo-600 text-white rounded-br-none'
+                                    : 'bg-[#2a2a2a] text-gray-200 border border-gray-700 rounded-bl-none'
+                                    }`}>
+                                    {msg.attachedNodes && msg.attachedNodes.length > 0 && (
+                                        <div
+                                            className="mb-2 flex items-center gap-2 p-2 rounded border border-white/20 bg-black/30"
+                                            title={msg.attachedNodes.map(n => `${n.label} (${n.type})`).join('\n')}
+                                        >
+                                            <Paperclip className="w-4 h-4 text-indigo-200 shrink-0" />
+                                            <span className="truncate text-[11px] text-white/90">
+                                                Attached nodes: {msg.attachedNodes.map(n => n.label).join(', ')}
+                                            </span>
                                         </div>
                                     )}
-                                </div>
-                            )}
-                            <div className="whitespace-pre-wrap">{msg.content}</div>
+                                    {msg.attachment && (
+                                        <div className="mb-2 relative rounded overflow-hidden border border-white/20 bg-black/40 p-1">
+                                            {msg.attachment.startsWith('data:image/') ? (
+                                                <img src={msg.attachment} alt="Attachment" className="max-w-full h-auto max-h-32 object-cover" />
+                                            ) : msg.attachment.startsWith('data:video/') ? (
+                                                <video src={msg.attachment} controls className="max-w-full h-auto max-h-32" />
+                                            ) : msg.attachment.startsWith('data:audio/') ? (
+                                                <audio src={msg.attachment} controls className="w-full h-8" />
+                                            ) : msg.attachment.startsWith('http') ? (
+                                                <div className="flex items-center gap-2 p-2 overflow-hidden bg-red-900/20">
+                                                    <Play className="w-4 h-4 text-red-500 shrink-0" />
+                                                    <span className="truncate text-[10px] text-gray-300 font-mono">{msg.attachment}</span>
+                                                </div>
+                                            ) : (
+                                                <div className="flex items-center gap-2 p-2 overflow-hidden">
+                                                    <Paperclip className="w-4 h-4 text-indigo-400 shrink-0" />
+                                                    <span className="truncate text-[10px] text-gray-400">{msg.attachment.split(';')[0]}</span>
+                                                </div>
+                                            )}
+                                        </div>
+                                    )}
+                                    <div className="whitespace-pre-wrap">{msg.content}</div>
 
-                            {msg.debug && (
-                                <details className="mt-3 border-t border-gray-700 pt-2">
-                                    <summary className="cursor-pointer select-none text-[11px] text-indigo-300 hover:text-indigo-200">
-                                        Debug (Thoughts: {msg.debug.thoughts.length}, Logs: {msg.debug.logs.length})
-                                    </summary>
-
-                                    {msg.debug.thoughts.length > 0 && (
-                                        <details className="mt-2">
-                                            <summary className="cursor-pointer select-none text-[11px] text-gray-300 hover:text-white">
-                                                Thoughts
+                                    {msg.debug && (
+                                        <details className="mt-3 border-t border-gray-700 pt-2">
+                                            <summary className="cursor-pointer select-none text-[11px] text-indigo-300 hover:text-indigo-200">
+                                                Debug (Thoughts: {msg.debug.thoughts.length}, Logs: {msg.debug.logs.length})
                                             </summary>
-                                            <div className="mt-2 max-h-40 overflow-y-auto rounded border border-gray-700 bg-black/20 p-2 font-mono text-[10px] text-gray-200 whitespace-pre-wrap break-words">
-                                                {msg.debug.thoughts.map((t, i) => (
-                                                    <div key={i} className="py-0.5">{t}</div>
-                                                ))}
-                                            </div>
+
+                                            {(msg.debug.agent || msg.debug.result) && (
+                                                <div className="mt-3 border-b border-gray-800 pb-2 mb-2">
+                                                    <div className="text-[10px] font-bold text-indigo-400 uppercase tracking-wider mb-1">Results</div>
+                                                    {msg.debug.agent && (
+                                                        <div className="text-[10px] flex items-center gap-2 mb-1">
+                                                            <span className="text-gray-500">Active Agent:</span>
+                                                            <span className="text-emerald-400 font-mono tracking-tight">{msg.debug.agent}</span>
+                                                        </div>
+                                                    )}
+                                                    {msg.debug.result && (
+                                                        <div className="mt-1">
+                                                            <div className="text-[10px] text-gray-500 mb-1">Final Content Delivered:</div>
+                                                            <div className="max-h-32 overflow-y-auto rounded bg-black/40 p-2 font-mono text-[9px] text-gray-400 whitespace-pre-wrap break-all border border-white/5">
+                                                                {msg.debug.result}
+                                                            </div>
+                                                        </div>
+                                                    )}
+                                                </div>
+                                            )}
+
+                                            {msg.debug.thoughts.length > 0 && (
+                                                <details className="mt-2">
+                                                    <summary className="cursor-pointer select-none text-[11px] text-gray-300 hover:text-white">
+                                                        Thoughts
+                                                    </summary>
+                                                    <div className="mt-2 max-h-40 overflow-y-auto rounded border border-gray-700 bg-black/20 p-2 font-mono text-[10px] text-gray-200 whitespace-pre-wrap break-words">
+                                                        {msg.debug.thoughts.map((t, i) => (
+                                                            <div key={i} className="py-0.5">{t}</div>
+                                                        ))}
+                                                    </div>
+                                                </details>
+                                            )}
+
+                                            <details className="mt-2" open={msg.debug.thoughts.length === 0}>
+                                                <summary className="cursor-pointer select-none text-[11px] text-gray-300 hover:text-white">
+                                                    Logs
+                                                </summary>
+                                                <div className="mt-2 max-h-40 overflow-y-auto rounded border border-gray-700 bg-black/20 p-2 font-mono text-[10px] text-gray-300 whitespace-pre-wrap break-words">
+                                                    {msg.debug.logs.length > 0
+                                                        ? msg.debug.logs.map((l, i) => (
+                                                            <div key={i} className="py-0.5">{l}</div>
+                                                        ))
+                                                        : <div className="opacity-60 italic">No logs captured.</div>
+                                                    }
+                                                </div>
+                                            </details>
                                         </details>
                                     )}
-
-                                    <details className="mt-2" open={msg.debug.thoughts.length === 0}>
-                                        <summary className="cursor-pointer select-none text-[11px] text-gray-300 hover:text-white">
-                                            Logs
-                                        </summary>
-                                        <div className="mt-2 max-h-40 overflow-y-auto rounded border border-gray-700 bg-black/20 p-2 font-mono text-[10px] text-gray-300 whitespace-pre-wrap break-words">
-                                            {msg.debug.logs.length > 0
-                                                ? msg.debug.logs.map((l, i) => (
-                                                    <div key={i} className="py-0.5">{l}</div>
-                                                ))
-                                                : <div className="opacity-60 italic">No logs captured.</div>
-                                            }
-                                        </div>
-                                    </details>
-                                </details>
-                            )}
-                        </div>
-                        {msg.role === 'assistant' && (
-                            <span className="text-[10px] text-gray-600 mt-1 ml-1">AI Assistant</span>
-                        )}
-                    </div>
-                ))}
-
-                {generationPhase !== 'idle' && (
-                    <div className="flex flex-col items-start animate-pulse">
-                        <div className="bg-[#2a2a2a] text-gray-200 border border-gray-700 rounded-xl rounded-bl-none p-3 text-xs w-[90%]">
-                            <div className="flex items-center gap-2">
-                                <Loader2 className="w-3 h-3 animate-spin text-indigo-400" />
-                                <span>{phaseLabel}</span>
-                            </div>
-
-                            <details className="mt-2 border-t border-gray-700 pt-2">
-                                <summary className="cursor-pointer select-none text-[11px] text-indigo-300 hover:text-indigo-200">
-                                    Live Debug
-                                </summary>
-
-                                {logs.filter(l => String(l).startsWith('THOUGHT:')).length > 0 && (
-                                    <details className="mt-2">
-                                        <summary className="cursor-pointer select-none text-[11px] text-gray-300 hover:text-white">
-                                            Thoughts
-                                        </summary>
-                                        <div className="mt-2 max-h-32 overflow-y-auto rounded border border-gray-700 bg-black/20 p-2 font-mono text-[10px] text-gray-200 whitespace-pre-wrap break-words">
-                                            {logs.filter(l => String(l).startsWith('THOUGHT:')).map((t, i) => (
-                                                <div key={i} className="py-0.5">{t}</div>
-                                            ))}
-                                        </div>
-                                    </details>
+                                </div>
+                                {msg.role === 'assistant' && (
+                                    <span className="text-[10px] text-gray-600 mt-1 ml-1">AI Assistant</span>
                                 )}
+                            </div>
+                        ))}
 
-                                <details className="mt-2" open>
-                                    <summary className="cursor-pointer select-none text-[11px] text-gray-300 hover:text-white">
-                                        Logs
-                                    </summary>
-                                    <div className="mt-2 max-h-32 overflow-y-auto rounded border border-gray-700 bg-black/20 p-2 font-mono text-[10px] text-gray-300 whitespace-pre-wrap break-words">
-                                        {logs.length > 0
-                                            ? logs.map((log, i) => <div key={i} className="py-0.5">{log}</div>)
-                                            : <div className="opacity-60 italic">Initializing pipeline...</div>
-                                        }
+                        {generationPhase !== 'idle' && (
+                            <div className="flex flex-col items-start animate-pulse">
+                                <div className="bg-[#2a2a2a] text-gray-200 border border-gray-700 rounded-xl rounded-bl-none p-3 text-xs w-[90%]">
+                                    <div className="flex items-center gap-2">
+                                        <Loader2 className="w-3 h-3 animate-spin text-indigo-400" />
+                                        <span>{phaseLabel}</span>
                                     </div>
-                                </details>
-                            </details>
-                        </div>
-                    </div>
-                )}
-                <div ref={messagesEndRef} />
-            </div>
 
-            {/* Input Area */}
-            <div className="p-3 border-t border-gray-700 bg-[#181818]">
-                <div
-                    className={`relative rounded-lg border ${isDragging ? 'border-indigo-500 bg-indigo-500/10' : 'border-gray-700 bg-black/20'}`}
-                    onDragOver={handleDragOver}
-                    onDragLeave={handleDragLeave}
-                    onDrop={handleDrop}
-                >
-                    {attachment && (
-                        <div className="p-2 border-b border-gray-700 flex items-center gap-2">
-                            {attachment.startsWith('data:image/') ? (
-                                <ImageIcon className="w-4 h-4 text-indigo-300" />
-                            ) : attachment.startsWith('data:video/') ? (
-                                <Play className="w-4 h-4 text-pink-400" />
-                            ) : attachment.startsWith('data:audio/') ? (
-                                <Mic className="w-4 h-4 text-emerald-400" />
-                            ) : attachment.startsWith('http') ? (
-                                <Play className="w-4 h-4 text-red-500" />
-                            ) : (
-                                <Paperclip className="w-4 h-4 text-blue-300" />
+                                    <details className="mt-2 border-t border-gray-700 pt-2">
+                                        <summary className="cursor-pointer select-none text-[11px] text-indigo-300 hover:text-indigo-200">
+                                            Live Debug
+                                        </summary>
+
+                                        {logs.filter(l => String(l).startsWith('THOUGHT:')).length > 0 && (
+                                            <details className="mt-2">
+                                                <summary className="cursor-pointer select-none text-[11px] text-gray-300 hover:text-white">
+                                                    Thoughts
+                                                </summary>
+                                                <div className="mt-2 max-h-32 overflow-y-auto rounded border border-gray-700 bg-black/20 p-2 font-mono text-[10px] text-gray-200 whitespace-pre-wrap break-words">
+                                                    {logs.filter(l => String(l).startsWith('THOUGHT:')).map((t, i) => (
+                                                        <div key={i} className="py-0.5">{t}</div>
+                                                    ))}
+                                                </div>
+                                            </details>
+                                        )}
+
+                                        <details className="mt-2" open>
+                                            <summary className="cursor-pointer select-none text-[11px] text-gray-300 hover:text-white">
+                                                Logs
+                                            </summary>
+                                            <div className="mt-2 max-h-32 overflow-y-auto rounded border border-gray-700 bg-black/20 p-2 font-mono text-[10px] text-gray-300 whitespace-pre-wrap break-words">
+                                                {logs.length > 0
+                                                    ? logs.map((log, i) => <div key={i} className="py-0.5">{log}</div>)
+                                                    : <div className="opacity-60 italic">Initializing pipeline...</div>
+                                                }
+                                            </div>
+                                        </details>
+                                    </details>
+                                </div>
+                            </div>
+                        )}
+                        <div ref={messagesEndRef} />
+                    </div>
+
+                    {/* Input Area */}
+                    <div className="p-3 border-t border-gray-700 bg-[#181818]">
+                        <div
+                            className={`relative rounded-lg border ${isDragging ? 'border-indigo-500 bg-indigo-500/10' : 'border-gray-700 bg-black/20'}`}
+                            onDragOver={handleDragOver}
+                            onDragLeave={handleDragLeave}
+                            onDrop={handleDrop}
+                        >
+                            {!!(attachedNodes && attachedNodes.length) && (
+                                <div className="p-2 border-b border-gray-700 flex items-center gap-2">
+                                    <Paperclip className="w-4 h-4 text-indigo-300 shrink-0" />
+                                    <span className="text-xs text-gray-200 truncate flex-1">
+                                        {attachedNodes.length} node{attachedNodes.length === 1 ? '' : 's'} attached
+                                    </span>
+                                    <button
+                                        onClick={() => onClearAttachedNodes?.()}
+                                        className="p-1 rounded hover:bg-white/10"
+                                        title="Clear attached nodes"
+                                        disabled={generationPhase !== 'idle'}
+                                    >
+                                        <X className="w-4 h-4 text-gray-300" />
+                                    </button>
+                                </div>
                             )}
-                            <span className="text-xs text-gray-200 truncate flex-1">
-                                {attachment.startsWith('data:audio/') ? 'Voice recording attached' :
-                                    attachment.startsWith('http') ? 'YouTube Link detected' : 'File attached'}
-                            </span>
+
+                            {attachment && (
+                                <div className="p-2 border-b border-gray-700 flex items-center gap-2">
+                                    {attachment.startsWith('data:image/') ? (
+                                        <ImageIcon className="w-4 h-4 text-indigo-300" />
+                                    ) : attachment.startsWith('data:video/') ? (
+                                        <Play className="w-4 h-4 text-pink-400" />
+                                    ) : attachment.startsWith('data:audio/') ? (
+                                        <Mic className="w-4 h-4 text-emerald-400" />
+                                    ) : attachment.startsWith('http') ? (
+                                        <Play className="w-4 h-4 text-red-500" />
+                                    ) : (
+                                        <Paperclip className="w-4 h-4 text-blue-300" />
+                                    )}
+                                    <span className="text-xs text-gray-200 truncate flex-1">
+                                        {attachment.startsWith('data:audio/') ? 'Voice recording attached' :
+                                            attachment.startsWith('http') ? 'YouTube Link detected' : 'File attached'}
+                                    </span>
+                                    <button
+                                        onClick={() => { setAttachment(null); setSelectedAssetId(null); }}
+                                        className="p-1 rounded hover:bg-white/10"
+                                        title="Remove attachment"
+                                        disabled={generationPhase !== 'idle'}
+                                    >
+                                        <X className="w-4 h-4 text-gray-300" />
+                                    </button>
+                                </div>
+                            )}
+
+                            {/* Slash Commands Menu */}
+                            {showCommands && (
+                                <div className="absolute bottom-full left-0 w-full mb-1 overflow-hidden rounded-lg bg-[#1a1a1a] border border-gray-700/50 shadow-2xl backdrop-blur-xl z-[100] animate-in slide-in-from-bottom-2 fade-in duration-200">
+                                    <div className="p-2 border-b border-gray-700/30 flex items-center justify-between">
+                                        <span className="text-[10px] font-bold text-gray-500 tracking-wider uppercase pl-1">Assistant Commands</span>
+                                        <span className="text-[9px] text-gray-600 bg-black/30 px-1.5 py-0.5 rounded flex items-center gap-1">
+                                            <kbd className="font-sans">ESC</kbd> to close
+                                        </span>
+                                    </div>
+                                    <div className="max-h-48 overflow-y-auto py-1">
+                                        {filteredCommands.map((cmd, idx) => (
+                                            <button
+                                                key={cmd.name}
+                                                onClick={() => {
+                                                    setPrompt(cmd.name + ' ');
+                                                    setShowCommands(false);
+                                                    promptInputRef.current?.focus();
+                                                }}
+                                                onMouseEnter={() => setSelectedCommandIndex(idx)}
+                                                className={`w-full flex items-center gap-3 px-3 py-2 text-left transition-all relative group ${idx === selectedCommandIndex
+                                                    ? 'bg-indigo-600/20 text-indigo-300'
+                                                    : 'text-gray-400 hover:bg-white/5 hover:text-gray-200'
+                                                    }`}
+                                            >
+                                                {idx === selectedCommandIndex && (
+                                                    <div className="absolute left-0 top-0 bottom-0 w-1 bg-indigo-500 rounded-r shadow-[0_0_10px_rgba(99,102,241,0.5)]" />
+                                                )}
+                                                <div className={`p-1.5 rounded-md transition-shadow ${idx === selectedCommandIndex ? 'bg-indigo-600/30 shadow-inner' : 'bg-gray-800'}`}>
+                                                    {cmd.icon}
+                                                </div>
+                                                <div className="flex flex-col min-w-0">
+                                                    <span className={`text-xs font-bold font-mono transition-colors ${idx === selectedCommandIndex ? 'text-white' : ''}`}>{cmd.name}</span>
+                                                    <span className="text-[10px] text-gray-500 truncate">{cmd.description}</span>
+                                                </div>
+                                                {idx === selectedCommandIndex && (
+                                                    <div className="ml-auto opacity-40">
+                                                        <div className="text-[10px] border border-white/20 px-1 rounded font-mono">ENTER</div>
+                                                    </div>
+                                                )}
+                                            </button>
+                                        ))}
+                                    </div>
+                                </div>
+                            )}
+
+                            <textarea
+                                ref={promptInputRef}
+                                id="assistant-prompt"
+                                name="prompt"
+                                value={prompt}
+                                onChange={(e) => setPrompt(e.target.value)}
+                                onKeyDown={handleKeyDown}
+                                placeholder="Describe the shader you want…"
+                                rows={3}
+                                className="w-full resize-none bg-transparent text-gray-200 text-sm p-2 pr-32 outline-none"
+                            />
+
+                            <input
+                                type="file"
+                                ref={fileInputRef}
+                                onChange={handleFileChange}
+                                className="hidden"
+                                accept="image/*,video/*,audio/*"
+                            />
+
                             <button
-                                onClick={() => { setAttachment(null); setSelectedAssetId(null); }}
-                                className="p-1 rounded hover:bg-white/10"
-                                title="Remove attachment"
+                                onClick={() => fileInputRef.current?.click()}
                                 disabled={generationPhase !== 'idle'}
+                                className="absolute bottom-2 right-20 p-2 rounded-lg bg-gray-800 hover:bg-gray-700 text-gray-200 transition-colors disabled:opacity-50"
+                                title="Attach file"
                             >
-                                <X className="w-4 h-4 text-gray-300" />
+                                <Paperclip className="w-4 h-4" />
+                            </button>
+
+                            <button
+                                onClick={isRecording ? stopRecording : startRecording}
+                                disabled={generationPhase !== 'idle'}
+                                className={`absolute bottom-2 right-11 p-2 rounded-lg transition-all ${isRecording
+                                    ? 'bg-red-600 text-white animate-pulse'
+                                    : 'bg-gray-800 text-gray-200 hover:bg-gray-700'
+                                    } disabled:opacity-50`}
+                                title={isRecording ? "Stop recording" : "Record voice"}
+                            >
+                                <Mic className="w-4 h-4" />
+                            </button>
+
+                            <button
+                                onClick={handleSend}
+                                disabled={(!prompt.trim() && !attachment) || generationPhase !== 'idle'}
+                                className={`absolute bottom-2 right-2 p-2 rounded-lg transition-all ${((prompt.trim() || attachment) && generationPhase === 'idle')
+                                    ? 'bg-indigo-600 text-white hover:bg-indigo-500 shadow-lg'
+                                    : 'bg-gray-800 text-gray-500 cursor-not-allowed'
+                                    }`}
+                                title="Send"
+                            >
+                                <Send className="w-4 h-4" />
                             </button>
                         </div>
-                    )}
-
-                    <textarea
-                        ref={promptInputRef}
-                        value={prompt}
-                        onChange={(e) => setPrompt(e.target.value)}
-                        onKeyDown={handleKeyDown}
-                        placeholder="Describe the shader you want…"
-                        rows={3}
-                        className="w-full resize-none bg-transparent text-gray-200 text-sm p-2 pr-32 outline-none"
-                    />
-
-                    <input
-                        type="file"
-                        ref={fileInputRef}
-                        onChange={handleFileChange}
-                        className="hidden"
-                        accept="image/*,video/*,audio/*"
-                    />
-
-                    <button
-                        onClick={() => fileInputRef.current?.click()}
-                        disabled={generationPhase !== 'idle'}
-                        className="absolute bottom-2 right-20 p-2 rounded-lg bg-gray-800 hover:bg-gray-700 text-gray-200 transition-colors disabled:opacity-50"
-                        title="Attach file"
-                    >
-                        <Paperclip className="w-4 h-4" />
-                    </button>
-
-                    <button
-                        onClick={isRecording ? stopRecording : startRecording}
-                        disabled={generationPhase !== 'idle'}
-                        className={`absolute bottom-2 right-11 p-2 rounded-lg transition-all ${isRecording
-                            ? 'bg-red-600 text-white animate-pulse'
-                            : 'bg-gray-800 text-gray-200 hover:bg-gray-700'
-                            } disabled:opacity-50`}
-                        title={isRecording ? "Stop recording" : "Record voice"}
-                    >
-                        <Mic className="w-4 h-4" />
-                    </button>
-
-                    <button
-                        onClick={handleSend}
-                        disabled={(!prompt.trim() && !attachment) || generationPhase !== 'idle'}
-                        className={`absolute bottom-2 right-2 p-2 rounded-lg transition-all ${((prompt.trim() || attachment) && generationPhase === 'idle')
-                            ? 'bg-indigo-600 text-white hover:bg-indigo-500 shadow-lg'
-                            : 'bg-gray-800 text-gray-500 cursor-not-allowed'
-                            }`}
-                        title="Send"
-                    >
-                        <Send className="w-4 h-4" />
-                    </button>
-                </div>
-            </div>
+                    </div>
                 </>
             )}
         </div>
