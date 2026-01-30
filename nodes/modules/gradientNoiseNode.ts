@@ -42,7 +42,7 @@ export const gradientNoiseNode: NodeModule = {
                     float d10 = dot(unity_gradientNoise_dir(ip + vec2(1.0, 0.0)), fp - vec2(1.0, 0.0));
                     float d11 = dot(unity_gradientNoise_dir(ip + vec2(1.0, 1.0)), fp - vec2(1.0, 1.0));
                     fp = fp * fp * fp * (fp * (fp * 6.0 - 15.0) + 10.0);
-                    return mix(mix(d00, d10, fp.x), mix(d01, d11, fp.x), fp.y) * 2.0 + 0.5;
+                    return mix(mix(d00, d10, fp.x), mix(d01, d11, fp.x), fp.y) + 0.5;
                 }
             `);
 

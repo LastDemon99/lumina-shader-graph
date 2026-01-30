@@ -528,9 +528,10 @@ const processGraph = (nodes: ShaderNode[], connections: Connection[], targetNode
                 // specular highlight (which can tint saturated colors and look "washed out").
                 body.push(`vec3 litPreview = applyLighting(${resultVar}, vNormal, viewDir, lightDir, lightColor, vec3(0.0), 0.5, 1.0);`);
 
-                // If u_previewMode is 0 (2D), use raw unlit result. If 1 (3D), use lit preview.
+                // If u_previewMode is 0 (2D), use raw unlit result with gamma. If 1 (3D), use lit preview.
+                body.push(`vec3 unlitGamma = pow(max(${resultVar}, 0.0), vec3(0.4545));`);
                 body.push(`vec3 litPreviewGamma = pow(max(litPreview, 0.0), vec3(0.4545));`);
-                body.push(`gl_FragColor = u_previewMode == 1 ? vec4(litPreviewGamma, 1.0) : vec4(${resultVar}, 1.0);`);
+                body.push(`gl_FragColor = u_previewMode == 1 ? vec4(litPreviewGamma, 1.0) : vec4(unlitGamma, 1.0);`);
             }
         }
     } else if (mode === 'fragment') {
@@ -569,8 +570,8 @@ const processGraph = (nodes: ShaderNode[], connections: Connection[], targetNode
                     vec3 _finalGamma = pow(_finalLighting, vec3(0.4545));
                     finalColor = mix(_finalGamma, _finalLighting, smoothstep(0.0, 0.5, _finalLuma));
                 } else {
-                    // 2D Unlit Raw Mode (No Gamma, No Lighting)
-                    finalColor = ${color} + ${emission};
+                    // 2D Unlit Raw Mode (With Gamma, No Lighting)
+                    finalColor = pow(max(${color} + ${emission}, 0.0), vec3(0.4545));
                 }
                 gl_FragColor = vec4(finalColor, ${alpha});
             `.trim());
