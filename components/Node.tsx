@@ -369,6 +369,17 @@ export const Node: React.FC<NodeProps> = ({
             else if (socketId === 'alpha') fallback = 1.0; // Alpha defaults to opaque
             else if (['multiply', 'divide', 'power'].includes(node.type) && socketId === 'b') fallback = 1;
 
+            if (typeof val === 'string' && val.startsWith('#')) {
+                return (
+                    <div className="flex items-center gap-1 bg-[#0a0a0a] border border-gray-700 rounded px-1 h-4 nodrag hover:border-gray-500 transition-colors relative w-12 overflow-hidden">
+                        <ThrottledColorInput
+                            value={val}
+                            onChange={(newVal) => handleInputChange(socketId, newVal)}
+                        />
+                    </div>
+                );
+            }
+
             const defaultVal = val !== undefined ? val : fallback;
 
             return (

@@ -35,6 +35,10 @@ class PreviewSystem {
     private gl: WebGLRenderingContext | null = null;
     private items: Map<string, RenderItem> = new Map();
     private programs: Map<string, WebGLProgram> = new Map(); // Cache programs by source hash
+    // Avoid recompiling the same broken shader every frame (which spams the console).
+    // Keyed by program hash; value is the earliest time (ms) we should retry.
+    // We default to "never retry" for a given progKey; shader edits produce a new key.
+    private programCompileRetryAfter: Map<string, number> = new Map();
     private textures: Map<string, WebGLTexture> = new Map(); // Cache textures by URL
     private placeholderTex: WebGLTexture | null = null;
 
@@ -238,15 +242,23 @@ class PreviewSystem {
         let program = this.programs.get(progKey);
 
         if (!program) {
+            const retryAfter = this.programCompileRetryAfter.get(progKey);
+            if (retryAfter !== undefined && performance.now() < retryAfter) {
+                return;
+            }
+
             try {
                 const p = createProgram(gl, item.vertShader, item.fragShader);
                 if (p) {
                     this.programs.set(progKey, p);
                     program = p;
+                    this.programCompileRetryAfter.delete(progKey);
                 } else {
                     return;
                 }
             } catch (e) {
+                // Don't retry this exact shader again; user edits will change progKey.
+                this.programCompileRetryAfter.set(progKey, Number.POSITIVE_INFINITY);
                 return;
             }
         }

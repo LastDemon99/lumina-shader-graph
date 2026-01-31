@@ -52,7 +52,7 @@ export const screenPositionNode: NodeModule = {
             `vec4 ${v} = vec4((gl_FragCoord.xy - u_viewPort.xy) / u_viewPort.zw, 0.0, 1.0);`
           );
         } else if (positionMode === 'Raw') {
-          ctx.body.push(`vec4 ${v} = gl_FragCoord;`);
+          ctx.body.push(`vec4 ${v} = vec4(gl_FragCoord.xy - u_viewPort.xy, gl_FragCoord.zw);`);
         } else if (positionMode === 'Center') {
           ctx.body.push(
             `vec4 ${v} = vec4(((gl_FragCoord.xy - u_viewPort.xy) / u_viewPort.zw) * 2.0 - 1.0, 0.0, 1.0);`

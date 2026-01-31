@@ -953,6 +953,8 @@ export class GeminiService {
       '  { id, type, label, x, y, inputs:[{id,label,type}], outputs:[{id,label,type}], data:{...} }',
       '- If agent=editor, node_content uses the MINIMAL node shape (id,type,x,y,data?).',
       '- If agent=architect, your JSON output must be the MINIMAL graph shape above; the app derives label/inputs/outputs from node.type.',
+      '- EXCEPTION: customFunction sockets may be per-node (dynamic). If a customFunction has non-default sockets, include node.inputs/node.outputs AND persist them in data.customInputs/data.customOutputs.',
+      '- When editing an existing customFunction, treat the socket IDs from CURRENT_GRAPH_SNAPSHOT as authoritative (e.g. input "sampledColor", output "result").',
       '',
       'NODE DATA BINDINGS (IMPORTANT):',
       '- color node: set data.value as a hex string "#RRGGBB" (example: {"type":"color","data":{"value":"#ff00aa"}}).',
@@ -962,6 +964,7 @@ export class GeminiService {
       '',
       'IMPORTANT COMPATIBILITY CONSTRAINTS:',
       '- DO NOT invent node types or socket ids; only use what is listed in AVAILABLE_NODES.',
+      '- Socket authority: for most nodes, socket IDs come from AVAILABLE_NODES; for customFunction, socket IDs may come from the snapshot (node.inputs/node.outputs or data.customInputs/data.customOutputs).',
       '- Ensure every connection references existing nodes.',
       '- Prefer left->right flow: sources at smaller x, sinks at larger x.',
       `- MASTER SOCKET IDS (authoritative): output.inputs=[${outputInputs || 'unknown'}]; vertex.outputs=[${vertexOutputs || 'unknown'}]`,
@@ -973,6 +976,14 @@ export class GeminiService {
       '- Include master nodes with stable ids:',
       '  - vertex node: { id: "vertex", type: "vertex" }',
       '  - output node: { id: "output", type: "output" }',
+
+      'SANITIZER / VALIDATION NOTES (DO NOT RELY ON THESE TO FIX BAD OUTPUT):',
+      '- Unknown node types are removed.',
+      '- Duplicate node ids may be renamed.',
+      '- Missing master nodes may be auto-added.',
+      '- Invalid connections (bad node/socket ids) are removed.',
+      '- Some inputs may enforce maxIncoming; extra connections are trimmed.',
+      '- If output has an incoming connection, unreachable nodes may be pruned.',
       '',
       'AVAILABLE_NODES (type: Inputs[...] -> Outputs[...]):',
       this.definitions,
@@ -1206,24 +1217,18 @@ export class GeminiService {
             })()
             : effectiveGraphJsonRaw);
 
-      // Sanitize Pass 1
+      // Sanitize Pass 1 - Restored for robust normalization
       let pass1 = utils.sanitizeGraph(graphJson);
-      let draft = pass1.graph;
-
-      // Handle simple array output from model if it forgets the wrapper
-      if (!draft) {
-        const maybeNodes = Array.isArray(graphJson) ? graphJson : null;
-        if (maybeNodes) {
-          pass1 = utils.sanitizeGraph({ nodes: maybeNodes, connections: [] });
-          draft = pass1.graph;
-        }
+      if (!pass1.graph && Array.isArray(graphJson)) {
+        // Handle raw array fallback
+        pass1 = utils.sanitizeGraph({ nodes: graphJson, connections: [] });
       }
 
+      let draft = pass1.graph;
       if (!draft) return null;
 
       this.logGraphSummary('Draft (One-shot)', draft, onLog);
 
-      // Report Sanitize issues
       if (onLog && pass1.report.changed) {
         onLog(`Sanitizer: ${pass1.report.issues.join(' | ')}`);
         if (pass1.report.examples.length > 0) {
@@ -1303,7 +1308,7 @@ export class GeminiService {
                 const extra = sanitized.report.examples.length - preview.length;
                 onLog(`Sanitizer examples: ${preview.join(' | ')}${extra > 0 ? ` (+${extra} more)` : ''}`);
               }
-              onLog(`Sanitizer final: nodes=${sanitized.report.final.nodeCount}, connections=${sanitized.report.final.connectionCount}`);
+              onLog(`Sanitizer final: nodes=${sanitized.report.final.nodeCount}, connections=${repaired.connections?.length ?? 0}`);
             }
             return sanitized.graph || draft;
           })()

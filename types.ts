@@ -163,6 +163,8 @@ export interface NodeData {
   functionName?: string; // For Custom Function Node
   inputNames?: string[]; // For Custom Function Node
   outputName?: string; // For Custom Function Node
+  customInputs?: SocketDef[]; // Persisted custom sockets for Custom Function Node
+  customOutputs?: SocketDef[]; // Persisted custom sockets for Custom Function Node
 }
 
 export interface ShaderNode {

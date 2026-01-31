@@ -158,7 +158,20 @@ export function normalizeGraph(raw: any): { nodes: any[]; connections: any[] } |
             ? (data as any).value
             : undefined;
 
-      return { id, type, x, y, ...(data ? { data } : {}), ...(dataValue !== undefined ? { dataValue } : {}) };
+      const inputs = Array.isArray(n.inputs) ? n.inputs : undefined;
+      const outputs = Array.isArray(n.outputs) ? n.outputs : undefined;
+
+      return {
+        id,
+        type,
+        x,
+        y,
+        ...(data ? { data } : {}),
+        ...(dataValue !== undefined ? { dataValue } : {}),
+        ...(inputs ? { inputs } : {}),
+        ...(outputs ? { outputs } : {}),
+        label: n.label
+      };
     });
 
   const connections = connsRaw
@@ -212,6 +225,12 @@ export function toMinimalGraphSnapshot(currentNodes: ShaderNode[], currentConnec
       type: n.type,
       x: typeof n.x === 'number' ? n.x : 0,
       y: typeof n.y === 'number' ? n.y : 0,
+      ...(n.type === 'customFunction' || (n.data && ((n.data as any).customInputs?.length || (n.data as any).customOutputs?.length))
+        ? {
+          inputs: Array.isArray((n as any).inputs) ? (n as any).inputs : undefined,
+          outputs: Array.isArray((n as any).outputs) ? (n as any).outputs : undefined,
+        }
+        : {}),
       ...(n.data ? { data: n.data } : {}),
     })),
     connections: (Array.isArray(currentConnections) ? currentConnections : []).map(c => ({
@@ -328,7 +347,20 @@ export function applyGraphOps(
       if (!type) {
         onLog?.(`Ops: skipping add for id=${finalId} (missing type)`);
       } else {
-        nodes.push({ id: finalId, type, x, y, ...(data ? { data } : {}) });
+        const label = (baseNode as any).label || type;
+        const inputs = Array.isArray((baseNode as any).inputs) ? (baseNode as any).inputs : undefined;
+        const outputs = Array.isArray((baseNode as any).outputs) ? (baseNode as any).outputs : undefined;
+
+        nodes.push({
+          id: finalId,
+          type,
+          x,
+          y,
+          label,
+          ...(data ? { data } : {}),
+          ...(inputs ? { inputs } : {}),
+          ...(outputs ? { outputs } : {})
+        });
       }
       const rewritten = connectionList.map(c => {
         if (!c || typeof c !== 'object') return c;
@@ -351,9 +383,12 @@ export function applyGraphOps(
         const patch = (nodeContent && typeof nodeContent === 'object') ? nodeContent : {};
         const existing = nodes[idx] || {};
         const next: any = { ...existing };
+        if (patch.label !== undefined) next.label = String(patch.label);
         if (patch.type !== undefined) next.type = String(patch.type);
         if (patch.x !== undefined) next.x = typeof patch.x === 'number' ? patch.x : next.x;
         if (patch.y !== undefined) next.y = typeof patch.y === 'number' ? patch.y : next.y;
+        if (Array.isArray((patch as any).inputs)) next.inputs = (patch as any).inputs;
+        if (Array.isArray((patch as any).outputs)) next.outputs = (patch as any).outputs;
         if (patch.data !== undefined && patch.data && typeof patch.data === 'object') {
           const prevData = (existing as any).data && typeof (existing as any).data === 'object' ? (existing as any).data : {};
           next.data = { ...prevData, ...(patch.data as any) };
@@ -402,6 +437,34 @@ export function sanitizeGraph(rawData: any): {
   stats.nodes_in = normalized.nodes.length;
   stats.connections_in = normalized.connections.length;
 
+  // Master node ID normalization (legacy/raw exports):
+  // Some graphs use ids like "vertex-node" and "master-node". The Gemini flow reserves
+  // canonical ids "vertex" and "output". To avoid duplicate masters and downstream
+  // ops targeting the wrong id, normalize aliases up-front.
+  const remapNodeIdInGraph = (fromId: string, toId: string) => {
+    const from = String(fromId);
+    const to = String(toId);
+    if (from === to) return;
+    if (!normalized.nodes.some(n => String(n.id) === from)) return;
+    if (normalized.nodes.some(n => String(n.id) === to)) return;
+
+    for (const n of normalized.nodes) {
+      if (String(n.id) === from) n.id = to;
+    }
+    for (const c of normalized.connections) {
+      if (!c || typeof c !== 'object') continue;
+      if (String((c as any).sourceNodeId) === from) (c as any).sourceNodeId = to;
+      if (String((c as any).targetNodeId) === from) (c as any).targetNodeId = to;
+    }
+    if (examples.length < 16) examples.push(`Normalized master id alias "${from}" -> "${to}"`);
+  };
+
+  // Only remap when the alias node is the correct master type.
+  const vertexAlias = normalized.nodes.find(n => String(n.id) === 'vertex-node' && String(n.type) === 'vertex');
+  if (vertexAlias) remapNodeIdInGraph('vertex-node', 'vertex');
+  const outputAlias = normalized.nodes.find(n => String(n.id) === 'master-node' && String(n.type) === 'output');
+  if (outputAlias) remapNodeIdInGraph('master-node', 'output');
+
   const allowedTypes = new Set<string>([...ALL_NODE_TYPES, 'output', 'vertex']);
   const sanitizedNodes = normalized.nodes
     .filter(n => {
@@ -412,14 +475,38 @@ export function sanitizeGraph(rawData: any): {
       }
       return ok;
     })
-    .map(n => ({
-      id: String(n.id),
-      type: String(n.type),
-      x: typeof n.x === 'number' ? n.x : 0,
-      y: typeof n.y === 'number' ? n.y : 0,
-      ...(n.data ? { data: n.data } : {}),
-      ...(n.dataValue !== undefined ? { dataValue: n.dataValue } : {}),
-    }));
+    .map(n => {
+      const mod = getNodeModule(n.type);
+      const def = mod?.definition;
+
+      const rawInputs = (Array.isArray((n as any).inputs) && (n as any).inputs.length > 0) ? (n as any).inputs : undefined;
+      const rawOutputs = (Array.isArray((n as any).outputs) && (n as any).outputs.length > 0) ? (n as any).outputs : undefined;
+      const dataObj = (n.data && typeof n.data === 'object') ? n.data : {};
+
+      // Custom Function sockets are per-node and may be persisted in data.customInputs/customOutputs
+      // (and/or provided directly as node.inputs/node.outputs). Preserve them when present.
+      const customInputs = (n.type === 'customFunction' && Array.isArray((dataObj as any).customInputs) && (dataObj as any).customInputs.length > 0)
+        ? (dataObj as any).customInputs
+        : undefined;
+      const customOutputs = (n.type === 'customFunction' && Array.isArray((dataObj as any).customOutputs) && (dataObj as any).customOutputs.length > 0)
+        ? (dataObj as any).customOutputs
+        : undefined;
+
+      const effectiveInputs = rawInputs || customInputs || def?.inputs || [];
+      const effectiveOutputs = rawOutputs || customOutputs || def?.outputs || [];
+
+      return {
+        id: String(n.id),
+        type: String(n.type),
+        label: String((n as any).label || def?.label || n.id),
+        x: typeof n.x === 'number' ? n.x : 0,
+        y: typeof n.y === 'number' ? n.y : 0,
+        inputs: effectiveInputs,
+        outputs: effectiveOutputs,
+        data: dataObj,
+        ...(n.dataValue !== undefined ? { dataValue: n.dataValue } : {}),
+      };
+    });
 
   const usedIds = new Set<string>();
   for (const node of sanitizedNodes) {
@@ -456,7 +543,18 @@ export function sanitizeGraph(rawData: any): {
 
   const ensureNode = (id: string, type: string, x: number, y: number) => {
     if (!sanitizedNodes.some(n => n.id === id)) {
-      sanitizedNodes.push({ id, type, x, y });
+      const mod = getNodeModule(type);
+      const def = mod?.definition;
+      sanitizedNodes.push({
+        id,
+        type,
+        label: def?.label || id,
+        x,
+        y,
+        inputs: def?.inputs || [],
+        outputs: def?.outputs || [],
+        data: {},
+      });
       stats.nodes_master_added++;
       if (examples.length < 16) examples.push(`Added missing master node id="${id}" type="${type}"`);
     }
@@ -500,10 +598,18 @@ export function sanitizeGraph(rawData: any): {
     const sourceDef = sourceMod?.definition;
     const targetDef = targetMod?.definition;
     if (!sourceDef || !targetDef) { stats.connections_invalid_removed++; return null; }
-    const sourceFallback = getFallbackSocketId({ ...(sourceDef as any), id: sourceNode.id, x: 0, y: 0, data: {} } as any, 'output', sourceMod?.socketRules);
-    const targetFallback = getFallbackSocketId({ ...(targetDef as any), id: targetNode.id, x: 0, y: 0, data: {} } as any, 'input', targetMod?.socketRules);
-    const sourceResolved = resolveSocketId(conn.sourceSocketId, sourceDef.outputs as any, sourceFallback || sourceDef.outputs[0]?.id, sourceNode.type, 'output');
-    const targetResolved = resolveSocketId(conn.targetSocketId, targetDef.inputs as any, targetFallback || targetDef.inputs[0]?.id, targetNode.type, 'input');
+    const sourceSockets = Array.isArray((sourceNode as any).outputs) ? (sourceNode as any).outputs : (sourceDef.outputs as any);
+    const targetSockets = Array.isArray((targetNode as any).inputs) ? (targetNode as any).inputs : (targetDef.inputs as any);
+
+    const sourceFallback = (sourceNode.type === 'customFunction')
+      ? (sourceSockets as any[])[0]?.id
+      : getFallbackSocketId({ ...(sourceDef as any), id: sourceNode.id, x: 0, y: 0, data: {} } as any, 'output', sourceMod?.socketRules);
+    const targetFallback = (targetNode.type === 'customFunction')
+      ? (targetSockets as any[])[0]?.id
+      : getFallbackSocketId({ ...(targetDef as any), id: targetNode.id, x: 0, y: 0, data: {} } as any, 'input', targetMod?.socketRules);
+
+    const sourceResolved = resolveSocketId(conn.sourceSocketId, sourceSockets as any, sourceFallback || (sourceSockets as any[])[0]?.id, sourceNode.type, 'output');
+    const targetResolved = resolveSocketId(conn.targetSocketId, targetSockets as any, targetFallback || (targetSockets as any[])[0]?.id, targetNode.type, 'input');
     if (!sourceResolved.id || !targetResolved.id) { stats.connections_invalid_removed++; return null; }
     return { id: conn.id || `conn-${Math.random().toString(36).slice(2)}`, sourceNodeId: sourceNode.id, sourceSocketId: sourceResolved.id, targetNodeId: targetNode.id, targetSocketId: targetResolved.id };
   }).filter(Boolean);
@@ -511,7 +617,16 @@ export function sanitizeGraph(rawData: any): {
   const tempNodes: ShaderNode[] = sanitizedNodes.map(n => {
     const mod = getNodeModule(n.type);
     const def = mod?.definition;
-    return { id: n.id, type: n.type, label: def?.label || n.type, x: n.x, y: n.y, inputs: def?.inputs || [], outputs: def?.outputs || [], data: { ...(n.data || {}), ...(n.dataValue !== undefined ? { value: n.dataValue } : {}) } } as ShaderNode;
+    return {
+      id: n.id,
+      type: n.type as any,
+      label: (n as any).label || def?.label || n.type,
+      x: n.x,
+      y: n.y,
+      inputs: Array.isArray((n as any).inputs) ? (n as any).inputs : (def?.inputs || []),
+      outputs: Array.isArray((n as any).outputs) ? (n as any).outputs : (def?.outputs || []),
+      data: { ...(n.data || {}), ...(n.dataValue !== undefined ? { value: n.dataValue } : {}) },
+    } as ShaderNode;
   });
   const tempById = new Map(tempNodes.map(n => [n.id, n]));
 
@@ -585,7 +700,19 @@ export function sanitizeGraph(rawData: any): {
 export function buildDynamicGraphContext(currentNodes: ShaderNode[], currentConnections: Connection[], prompt?: string): string {
   // Keep the current graph snapshot compact to avoid blowing up context.
   const snapshot = {
-    nodes: currentNodes.map(n => ({ id: n.id, type: n.type, x: Math.round(n.x), y: Math.round(n.y), data: n.data })),
+    nodes: currentNodes.map(n => ({
+      id: n.id,
+      type: n.type,
+      x: Math.round(n.x),
+      y: Math.round(n.y),
+      ...(n.type === 'customFunction' || (n.data && ((n.data as any).customInputs?.length || (n.data as any).customOutputs?.length))
+        ? {
+          inputs: (n as any).inputs,
+          outputs: (n as any).outputs,
+        }
+        : {}),
+      data: n.data,
+    })),
     connections: currentConnections.map(c => ({
       sourceNodeId: c.sourceNodeId,
       sourceSocketId: c.sourceSocketId,
@@ -607,15 +734,21 @@ export function convertToShaderNodes(rawNodes: any[]): ShaderNode[] {
   return rawNodes.map(n => {
     const mod = getNodeModule(n.type);
     const def = mod?.definition;
+
+    // Prioritize node's own inputs/outputs if they exist (Agent's full JSON)
+    // but fallback to registry definitions if they are missing or empty.
+    const inputs = (Array.isArray(n.inputs) && n.inputs.length > 0) ? n.inputs : (def?.inputs || []);
+    const outputs = (Array.isArray(n.outputs) && n.outputs.length > 0) ? n.outputs : (def?.outputs || []);
+
     return {
       id: n.id,
       type: n.type,
-      label: def?.label || n.type,
+      label: n.label || def?.label || n.type,
       x: n.x || 0,
       y: n.y || 0,
-      inputs: def?.inputs || [],
-      outputs: def?.outputs || [],
-      data: { ...(n.data || {}), ...(n.dataValue !== undefined ? { value: n.dataValue } : {}) }
+      inputs,
+      outputs,
+      data: (n.data && typeof n.data === 'object') ? n.data : { ...(n.dataValue !== undefined ? { value: n.dataValue } : {}) }
     } as ShaderNode;
   });
 }

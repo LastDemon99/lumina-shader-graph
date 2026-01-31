@@ -577,6 +577,17 @@ const App: React.FC = () => {
       if (data && typeof data === 'object' && Array.isArray((data as any).nodes) && Array.isArray((data as any).connections)) {
         const typedData = data as { nodes: ShaderNode[], connections: Connection[], previewMode?: '2d' | '3d' };
 
+        // Normalize legacy Custom Function labels that were incorrectly overwritten by functionName.
+        const defaultCustomFnLabel = getNodeModule('customFunction')?.definition?.label || 'Custom Function';
+        const normalizedNodes = typedData.nodes.map(n => {
+          if (n.type !== 'customFunction') return n;
+          const fn = (n.data as any)?.functionName;
+          if (!n.label || (fn && n.label === fn) || n.label === 'main') {
+            return { ...n, label: defaultCustomFnLabel };
+          }
+          return n;
+        });
+
         suppressManualHistoryRef.current = true;
         geminiService.resetPersistentGraphSession();
 
@@ -593,11 +604,11 @@ const App: React.FC = () => {
         setConnections([]);
 
         setTimeout(() => {
-          setNodes(typedData.nodes);
+          setNodes(normalizedNodes);
           setConnections(typedData.connections);
           setIsSaved(true);
 
-          geminiService.setPersistentGraphBaseline(typedData.nodes, typedData.connections);
+          geminiService.setPersistentGraphBaseline(normalizedNodes, typedData.connections);
           suppressManualHistoryRef.current = false;
         }, 50);
       } else {
@@ -1056,6 +1067,14 @@ const App: React.FC = () => {
   const isTypeCompatible = (sourceType: SocketType, targetType: SocketType) => {
     if (sourceType === targetType) return true;
 
+    // Special case: "Texture Asset" style nodes expose outputs as `texture` / `textureArray` in the UI,
+    // but they actually emit a sampled `vec4` value for preview/codegen.
+    // Allow wiring those outputs into numeric/vector sockets (e.g. Custom Function vec4 input).
+    const vectorTypes = ['float', 'vec2', 'vec3', 'vec4', 'color', 'mat2', 'mat3', 'mat4'];
+    if ((sourceType === 'texture' || sourceType === 'textureArray') && vectorTypes.includes(targetType)) {
+      return true;
+    }
+
     // Strict blocking for critical types to prevent illegal shader operations (like vec4 * mat3)
     const strictTypes = ['texture', 'textureArray', 'sampler', 'gradient', 'samplerState'];
     if (strictTypes.includes(sourceType) || strictTypes.includes(targetType)) {
@@ -1063,7 +1082,7 @@ const App: React.FC = () => {
     }
 
     // Allow general vector/float/matrix conversions (handled downstream by castTo)
-    const vectorTypes = ['float', 'vec2', 'vec3', 'vec4', 'color', 'mat2', 'mat3', 'mat4'];
+    // (kept permissive; actual casting happens in glslGenerator.castTo)
     if (vectorTypes.includes(sourceType) && vectorTypes.includes(targetType)) {
       return true;
     }
@@ -1143,10 +1162,109 @@ const App: React.FC = () => {
     setActiveTab('code');
   }, []);
 
-  const handleSaveCode = useCallback((nodeId: string, code: string) => {
-    updateNodeData(nodeId, { code });
-    setLinterLogs(prev => [...prev, `Code updated for node ${nodeId}`]);
-  }, [updateNodeData]);
+  const parseCustomFunctionSocketsFromCode = (code: string): { inputs: any[]; outputs: any[] } | null => {
+    const src = String(code || '');
+
+    // Strip comments to avoid matching signatures inside commented code.
+    const withoutBlockComments = src.replace(/\/\*[\s\S]*?\*\//g, '');
+    const withoutLineComments = withoutBlockComments.replace(/(^|\n)\s*\/\/.*(?=\n|$)/g, '$1');
+
+    const m = /\bvoid\s+main\s*\(/.exec(withoutLineComments);
+    if (!m) return null;
+
+    // Extract the parameter list by scanning until the matching ')'.
+    const start = m.index + m[0].length;
+    let depth = 1;
+    let end = start;
+    while (end < withoutLineComments.length && depth > 0) {
+      const ch = withoutLineComments[end];
+      if (ch === '(') depth++;
+      else if (ch === ')') depth--;
+      end++;
+    }
+    if (depth !== 0) return null;
+
+    const argsRaw = withoutLineComments.slice(start, end - 1).trim();
+    if (!argsRaw) return { inputs: [], outputs: [] };
+
+    const args = argsRaw.split(',').map(s => s.trim()).filter(Boolean);
+
+    const mapType = (glslType: string) => {
+      const t = glslType.trim();
+      if (t === 'float' || t === 'vec2' || t === 'vec3' || t === 'vec4' || t === 'mat2' || t === 'mat3' || t === 'mat4') return t;
+      if (t === 'color') return 'color';
+      if (t === 'sampler2D') return 'texture';
+      if (t === 'sampler2DArray') return 'textureArray';
+      return null;
+    };
+
+    const normalizeId = (name: string) => {
+      const cleaned = name.replace(/\[[^\]]*\]$/g, '').trim();
+      // Keep ids safe for downstream codegen
+      const safe = cleaned.replace(/[^A-Za-z0-9_]/g, '_');
+      if (!/^[A-Za-z_]/.test(safe)) return `p_${safe}`;
+      return safe;
+    };
+
+    const inputs: any[] = [];
+    const outputs: any[] = [];
+
+    for (const arg of args) {
+      // Qualifiers we care about: out / inout (others are ignored)
+      const tokens = arg.split(/\s+/).filter(Boolean);
+      if (tokens.length < 2) continue;
+
+      let idx = 0;
+      const qualifier = tokens[idx] === 'out' || tokens[idx] === 'inout' ? tokens[idx++] : null;
+
+      const typeToken = tokens[idx++];
+      const nameToken = tokens[idx++];
+      if (!typeToken || !nameToken) continue;
+
+      const socketType = mapType(typeToken);
+      if (!socketType) continue;
+
+      const id = normalizeId(nameToken);
+      const socket = { id, label: id, type: socketType };
+
+      if (qualifier === 'out' || qualifier === 'inout') outputs.push(socket);
+      else inputs.push(socket);
+    }
+
+    return { inputs, outputs };
+  };
+
+  const handleSaveCustomFunction = useCallback((nodeId: string, data: { code: string, functionName: string, inputs: any[], outputs: any[] }) => {
+    const parsed = parseCustomFunctionSocketsFromCode(data.code);
+    const nextInputs = (parsed && parsed.inputs.length > 0) ? parsed.inputs : data.inputs;
+    const nextOutputs = (parsed && parsed.outputs.length > 0) ? parsed.outputs : data.outputs;
+
+    setNodes(prev => prev.map(n => {
+      if (n.id === nodeId) {
+        const defaultLabel = getNodeModule('customFunction')?.definition?.label || 'Custom Function';
+        // Don't replace the node's display label with the function name (e.g. "main").
+        // If an older graph had label == functionName, restore the default label.
+        const nextLabel = (n.type === 'customFunction' && (n.label === data.functionName || !n.label))
+          ? defaultLabel
+          : n.label;
+        return {
+          ...n,
+          label: nextLabel,
+          inputs: nextInputs,
+          outputs: nextOutputs,
+          data: {
+            ...n.data,
+            code: data.code,
+            functionName: data.functionName,
+            customInputs: nextInputs,
+            customOutputs: nextOutputs
+          }
+        };
+      }
+      return n;
+    }));
+    setLinterLogs(prev => [...prev, `Custom Function "${data.functionName}" saved and recompiled.`]);
+  }, []);
 
   const addNode = (type: NodeType, clientX?: number, clientY?: number) => {
     const mod = getNodeModule(type);
@@ -1223,11 +1341,17 @@ const App: React.FC = () => {
 
         const node: ShaderNode = {
           ...getDefinitionOrPlaceholder(n.type),
+          ...n,
           id: n.id,
           x: n.x ?? 0,
           y: n.y ?? 0,
           data: { ...initialData, ...aiData },
         };
+        // Restore custom sockets if they were lost in the AI/Serialization roundtrip
+        if (node.type === 'customFunction' && node.data.customInputs) {
+          node.inputs = node.data.customInputs;
+          node.outputs = node.data.customOutputs || node.outputs;
+        }
         if (node.type === 'remap' && !node.data.inputValues) node.data.inputValues = { inMinMax: { x: -1, y: 1 }, outMinMax: { x: 0, y: 1 } };
         return node;
       });
@@ -1280,11 +1404,16 @@ const App: React.FC = () => {
 
       const node: ShaderNode = {
         ...getDefinitionOrPlaceholder(n.type),
+        ...n,
         id: n.id,
         x: n.x ?? 0,
         y: n.y ?? 0,
         data: { ...initialData, ...aiData },
       };
+      if (node.type === 'customFunction' && node.data.customInputs) {
+        node.inputs = node.data.customInputs;
+        node.outputs = node.data.customOutputs || node.outputs;
+      }
       if (node.type === 'remap' && !node.data.inputValues) node.data.inputValues = { inMinMax: { x: -1, y: 1 }, outMinMax: { x: 0, y: 1 } };
       return node;
     });
@@ -1326,11 +1455,16 @@ const App: React.FC = () => {
 
       const node: ShaderNode = {
         ...getDefinitionOrPlaceholder(n.type),
+        ...n,
         id: n.id,
         x: n.x ?? 0,
         y: n.y ?? 0,
         data: { ...initialData, ...aiData },
       };
+      if (node.type === 'customFunction' && node.data.customInputs) {
+        node.inputs = node.data.customInputs;
+        node.outputs = node.data.customOutputs || node.outputs;
+      }
       if (node.type === 'remap' && !node.data.inputValues) node.data.inputValues = { inMinMax: { x: -1, y: 1 }, outMinMax: { x: 0, y: 1 } };
       return node;
     });
@@ -1699,10 +1833,11 @@ const App: React.FC = () => {
         <div className={`flex-1 h-full relative bg-[#0a0a0a] ${activeTab === 'scene' ? 'z-10 flex' : 'z-0 hidden'}`}>
           <SceneView fragShader={fragShader} vertShader={vertShader} active={activeTab === 'scene'} textures={textureUniforms} />
         </div>
-        <div className={`flex-1 h-full relative bg-[#0a0a0a] flex ${activeTab === 'code' ? 'z-10' : 'z-0 hidden'}`}>
+        <div className={`flex-1 h-full relative bg-[#0a0a0a] flex ${activeTab === 'code' ? 'z-10 flex' : 'z-0 hidden'}`}>
           <CodeEditor
+            key={editingNodeId || 'none'}
             node={nodes.find(n => n.id === editingNodeId) || null}
-            onSave={handleSaveCode}
+            onSave={handleSaveCustomFunction}
             onClose={() => setActiveTab('graph')}
           />
         </div>

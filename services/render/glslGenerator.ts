@@ -41,11 +41,21 @@ const COMMON_HEADER = `
   precision highp float;
   precision highp int;
   
-  #define PI 3.14159265359
-  #define TAU 6.28318530718
-  #define PHI 1.61803398875
-  #define E 2.71828182846
-  #define SQRT2 1.41421356237
+  #ifndef PI
+    #define PI 3.14159265359
+  #endif
+  #ifndef TAU
+    #define TAU 6.28318530718
+  #endif
+  #ifndef PHI
+    #define PHI 1.61803398875
+  #endif
+  #ifndef E
+    #define E 2.71828182846
+  #endif
+  #ifndef SQRT2
+    #define SQRT2 1.41421356237
+  #endif
 
   // Transpose Polyfills
   mat2 transpose(mat2 m) {
@@ -74,6 +84,23 @@ const COMMON_HEADER = `
     // Fallback for drivers missing the extension (ignores LOD)
     #define texture2D_LOD(sampler, coord, lod) texture2D(sampler, coord)
   #endif
+`;
+
+// GLSL compatibility shim:
+// WebGL 1.0 targets GLSL ES 1.00 where `texture()` doesn't exist.
+// Provide a function-like macro so user code can write `texture(sampler, uv)`.
+// - Fragment: maps to texture2D
+// - Vertex: maps to texture2D_LOD(..., 0.0) to match our vertex sampling convention
+const TEXTURE_FN_SHIM_FRAGMENT = `
+    #ifndef texture
+        #define texture(sampler, coord) texture2D(sampler, coord)
+    #endif
+`;
+
+const TEXTURE_FN_SHIM_VERTEX = `
+    #ifndef texture
+        #define texture(sampler, coord) texture2D_LOD(sampler, coord, 0.0)
+    #endif
 `;
 
 const COLOR_FUNCTIONS = `
@@ -461,7 +488,14 @@ const processGraph = (nodes: ShaderNode[], connections: Connection[], targetNode
         if (node) {
             let resultVar = 'vec3(1.0, 0.0, 1.0)';
 
-            const varDef = variables[`${targetNodeId}_out`] || variables[`${targetNodeId}_rgba`] || variables[`${targetNodeId}_rgb`] || variables[`${targetNodeId}_r`];
+                        // Prefer common preview outputs, but fall back to the node's first declared output.
+                        // This is important for Custom Function nodes where the output socket might be renamed.
+                        const preferredSocketIds = ['out', 'rgba', 'rgb', 'r'];
+                        const firstOutputId = Array.isArray(node.outputs) && node.outputs.length > 0 ? node.outputs[0].id : undefined;
+                        const previewSocketId = preferredSocketIds.find(id => variables[`${targetNodeId}_${id}`])
+                            ?? (firstOutputId && variables[`${targetNodeId}_${firstOutputId}`] ? firstOutputId : undefined);
+
+                        const varDef = previewSocketId ? variables[`${targetNodeId}_${previewSocketId}`] : undefined;
             const resultType = varDef?.type || 'vec3';
 
             if (varDef) {
@@ -638,10 +672,12 @@ const processGraph = (nodes: ShaderNode[], connections: Connection[], targetNode
 
     // Combine components
     const extensions = getRequiredExtensions(nodes, mode);
+    const textureShim = mode === 'vertex' ? TEXTURE_FN_SHIM_VERTEX : TEXTURE_FN_SHIM_FRAGMENT;
 
     return `
 ${extensions}
 ${COMMON_HEADER}
+${textureShim}
 ${mode === 'vertex' ? ATTRIBUTES : ''}
 ${VARYINGS}
 ${UNIFORMS}
