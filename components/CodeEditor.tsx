@@ -52,8 +52,8 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({ node, onSave, onClose })
     };
 
     // NOTE: In this shader-graph, sockets typed as 'texture' do not behave like a GLSL sampler variable.
-    // They represent an already-sampled color in most node previews (vec4), because GLSL ES 1.0 can't
-    // pass sampler2D values around nor use out sampler2D parameters.
+    // They represent an already-sampled color in most node previews (vec4), because GLSL doesn't allow
+    // passing sampler2D values around nor using out sampler2D parameters.
     const glslParamType = (t: string) => {
         if (t === 'texture' || t === 'textureArray') return 'vec4';
         if (t === 'color') return 'vec3';

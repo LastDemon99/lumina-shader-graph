@@ -245,7 +245,7 @@ export class GeminiService {
     const ai = this.createClient();
     if (!ai) return;
 
-    const softwareContext = `AVAILABLE_NODES:\n${this.definitions}\n\nSCOPE: Lumina Shader Graph (WebGL 1.0).`;
+    const softwareContext = `AVAILABLE_NODES:\n${this.definitions}\n\nSCOPE: Lumina Shader Graph (WebGL 2.0).`;
     const systemInstruction = this.buildSystemInstruction('consultant', softwareContext);
     const chat = await this.getOrCreatePersistentConsultantChat(ai, systemInstruction, onLog);
 
@@ -295,7 +295,7 @@ export class GeminiService {
     }
 
     // We provide available nodes as context
-    const softwareContext = `AVAILABLE_NODES:\n${this.definitions}\n\nSCOPE: Lumina Shader Graph (WebGL 1.0).${dynamicGraphContext}`;
+    const softwareContext = `AVAILABLE_NODES:\n${this.definitions}\n\nSCOPE: Lumina Shader Graph (WebGL 2.0).${dynamicGraphContext}`;
     const systemInstruction = this.buildSystemInstruction('consultant', softwareContext);
     const chat = await this.getOrCreatePersistentConsultantChat(ai, systemInstruction, onLog);
 

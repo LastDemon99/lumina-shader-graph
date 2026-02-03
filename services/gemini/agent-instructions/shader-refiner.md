@@ -39,7 +39,7 @@ You must fix only what is broken or specifically requested. **Do not reinvent th
 - When a `customFunction` exists in the graph, ensure it is structurally consistent:
   - `data.code` must include exactly one `void main(...)`.
   - Inputs are arguments; outputs are `out` params (count/order matches node sockets).
-  - Avoid `sampler2D` params and `out sampler2D` (WebGL 1.0 limitation). Use sampled `vec4` colors from texture sampling nodes.
+  - Avoid `sampler2D` params and `out sampler2D` (GLSL limitation). Use sampled `vec4` colors from texture sampling nodes.
   - **Dynamic sockets (CRITICAL):** `customFunction` sockets may be per-node.
     - Treat the node's own `inputs`/`outputs` (or `data.customInputs`/`data.customOutputs`) as authoritative.
     - Do NOT replace them with the default `in1/in2/out` assumption.

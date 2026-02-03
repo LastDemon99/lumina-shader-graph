@@ -17,11 +17,11 @@ export const customFunctionNode: NodeModule = {
         sections: [],
     },
     initialData: () => ({
-        code: `// Custom Function GLSL\n// IMPORTANT:\n// - Define exactly one: void main(...)
-//   Respect:
-//     - Inputs (Arguments): must match this node's sockets count/order.
-//     - Outputs (Out Params): declare outputs using 'out' qualifiers matching output sockets.
-//   Expected Signature example: void main(float in1, float in2, out vec3 result)\n//   In node previews, 'texture' sockets behave like an already-sampled color (vec4 RGBA).\n// - Available Constants: PI, TAU, PHI, E, SQRT2.\n// - Available Globals: u_time (float), u_cameraPosition (vec3).\n// - Available Varyings: vUv (vec2), vPosition (vec3), vNormal (vec3), vColor (vec4).\n\nvoid main(float in1, float in2, out vec3 result) {\n    result = vec3(in1 + in2, 0.0, 1.0);\n}`,
+        code: `// Custom Function GLSL (GLSL ES 3.00 / WebGL2)\n// IMPORTANT:\n// - Define exactly one: void main(...)
+    //   Respect:
+    //     - Inputs (Arguments): must match this node's sockets count/order.
+    //     - Outputs (Out Params): declare outputs using 'out' qualifiers matching output sockets.
+    //   Expected Signature example: void main(float in1, float in2, out vec3 result)\n//   In node previews, 'texture' sockets behave like an already-sampled color (vec4 RGBA).\n// - You can use texture(...) and dynamic loop limits in WebGL2.\n// - Available Constants: PI, TAU, PHI, E, SQRT2.\n// - Available Globals: u_time (float), u_cameraPosition (vec3).\n// - Available Varyings: vUv (vec2), vPosition (vec3), vNormal (vec3), vColor (vec4).\n\nvoid main(float in1, float in2, out vec3 result) {\n    result = vec3(in1 + in2, 0.0, 1.0);\n}`,
         functionName: 'main',
         inputNames: ['in1', 'in2'],
         outputName: 'result',
@@ -38,7 +38,7 @@ export const customFunctionNode: NodeModule = {
             const needsLocalFragCoord = ctx.mode === 'fragment' && /\bgl_FragCoord\b/.test(code);
             const localFragCoordVar = `lumina_gl_FragCoord_${sanitizedId}`;
 
-            // Automatic Type Mapping: Convert high-level types to GLSL ES 1.0 types
+            // Automatic Type Mapping: Convert high-level types to GLSL ES types
             const mapType = (type: string) => {
                 if (type === 'texture') return 'sampler2D';
                 if (type === 'textureArray') return 'sampler2DArray';
@@ -75,7 +75,7 @@ export const customFunctionNode: NodeModule = {
             // Prepare outputs (may have multiple)
             const outVars = outputsList.map(outSocket => {
                 const v = ctx.varName(ctx.id, outSocket.id);
-                // CRITICAL: WebGL 1.0 does not allow local sampler variables or sampler out params.
+                // CRITICAL: GLSL does not allow local sampler variables or sampler out params.
                 // We only declare local variables for non-sampler types.
                 if (outSocket.type !== 'texture' && outSocket.type !== 'textureArray') {
                     ctx.body.push(`${mapType(outSocket.type)} ${v};`);

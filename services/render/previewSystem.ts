@@ -32,7 +32,7 @@ interface GLGeometry {
 
 class PreviewSystem {
     private canvas: HTMLCanvasElement | null = null;
-    private gl: WebGLRenderingContext | null = null;
+    private gl: WebGL2RenderingContext | null = null;
     private items: Map<string, RenderItem> = new Map();
     private programs: Map<string, WebGLProgram> = new Map(); // Cache programs by source hash
     // Avoid recompiling the same broken shader every frame (which spams the console).
@@ -41,6 +41,7 @@ class PreviewSystem {
     private programCompileRetryAfter: Map<string, number> = new Map();
     private textures: Map<string, WebGLTexture> = new Map(); // Cache textures by URL
     private placeholderTex: WebGLTexture | null = null;
+    private vao: WebGLVertexArrayObject | null = null;
 
     // Shared Geometry Buffers
     private quadGeo: GLGeometry | null = null;
@@ -61,6 +62,9 @@ class PreviewSystem {
 
         this.placeholderTex = createPlaceholderTexture(this.gl);
 
+        this.vao = this.gl.createVertexArray();
+        if (this.vao) this.gl.bindVertexArray(this.vao);
+
         // Upload geometry once
         this.quadGeo = this.uploadGeometry(this.gl, createQuad());
         this.sphereGeo = this.uploadGeometry(this.gl, createSphere(0.8, 32, 32));
@@ -70,7 +74,7 @@ class PreviewSystem {
         this.startLoop();
     }
 
-    private uploadGeometry(gl: WebGLRenderingContext, data: any): GLGeometry | null {
+    private uploadGeometry(gl: WebGL2RenderingContext, data: any): GLGeometry | null {
         const position = gl.createBuffer();
         if (!position) return null;
         gl.bindBuffer(gl.ARRAY_BUFFER, position);
@@ -132,6 +136,7 @@ class PreviewSystem {
             this.textures.forEach(t => this.gl!.deleteTexture(t));
             this.textures.clear();
             if (this.placeholderTex) this.gl!.deleteTexture(this.placeholderTex);
+            if (this.vao) this.gl!.deleteVertexArray(this.vao);
         }
 
         this.gl = null;
@@ -264,6 +269,8 @@ class PreviewSystem {
         }
 
         gl.useProgram(program!);
+
+        if (this.vao) gl.bindVertexArray(this.vao);
 
         // 3. Geometry
         let geo = this.sphereGeo;
@@ -426,6 +433,8 @@ class PreviewSystem {
         gl.drawElements(gl.TRIANGLES, geo.count, gl.UNSIGNED_SHORT, 0);
 
         gl.depthMask(!!prevDepthMask);
+
+        if (this.vao) gl.bindVertexArray(null);
     }
 
     private bindAttribute(program: WebGLProgram, name: string, buffer: WebGLBuffer, size: number) {

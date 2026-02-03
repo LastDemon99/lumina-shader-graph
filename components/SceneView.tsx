@@ -34,7 +34,8 @@ export const SceneView: React.FC<SceneViewProps> = ({
     mode = '3d'
 }) => {
     const canvasRef = useRef<HTMLCanvasElement>(null);
-    const glRef = useRef<WebGLRenderingContext | null>(null);
+    const glRef = useRef<WebGL2RenderingContext | null>(null);
+    const vaoRef = useRef<WebGLVertexArrayObject | null>(null);
     const programRef = useRef<WebGLProgram | null>(null);
     const warnedMissingPositionRef = useRef(false);
     const reqIdRef = useRef<number>(0);
@@ -61,7 +62,7 @@ export const SceneView: React.FC<SceneViewProps> = ({
 
         // Check for stale textures
         Object.keys(loadedTexturesRef.current).forEach(key => {
-            const texConfig = textures[key];
+            const texConfig = textures[key] as TextureConfig | undefined;
             const currentCacheKey = loadedSourcesRef.current[key];
             const isStale = !texConfig;
             const targetCacheKey = texConfig ? `${texConfig.url}|${texConfig.wrap}|${texConfig.filter}` : '';
@@ -75,7 +76,7 @@ export const SceneView: React.FC<SceneViewProps> = ({
         });
 
         // Load new or update
-        Object.entries(textures).forEach(([uniformName, config]) => {
+        (Object.entries(textures) as [string, TextureConfig][]).forEach(([uniformName, config]) => {
             const cacheKey = `${config.url}|${config.wrap}|${config.filter}`;
             if (!loadedTexturesRef.current[uniformName]) {
                 const tex = loadTexture(gl, config.url, config.wrap, config.filter);
@@ -105,6 +106,7 @@ export const SceneView: React.FC<SceneViewProps> = ({
                     // Minimal cleanup
                     Object.values(loadedTexturesRef.current).forEach(tex => gl.deleteTexture(tex));
                     if (programRef.current) gl.deleteProgram(programRef.current);
+                    if (vaoRef.current) gl.deleteVertexArray(vaoRef.current);
                     glRef.current = null;
                 }
             };
@@ -125,6 +127,8 @@ export const SceneView: React.FC<SceneViewProps> = ({
             glRef.current = gl;
             gl.clearColor(0.05, 0.05, 0.05, 1.0);
             missingTextureRef.current = createPlaceholderTexture(gl);
+            vaoRef.current = gl.createVertexArray();
+            if (vaoRef.current) gl.bindVertexArray(vaoRef.current);
         }
 
         const gl = glRef.current;
@@ -168,6 +172,8 @@ export const SceneView: React.FC<SceneViewProps> = ({
                 gl.viewport(0, 0, displayWidth, displayHeight);
             }
             gl.useProgram(programRef.current);
+
+            if (vaoRef.current) gl.bindVertexArray(vaoRef.current);
 
             const getAttribLocationAny = (names: string[]): number => {
                 for (const n of names) {
@@ -398,6 +404,8 @@ export const SceneView: React.FC<SceneViewProps> = ({
 
             // Restore default depth write for any future draws
             gl.depthMask(true);
+
+            if (vaoRef.current) gl.bindVertexArray(null);
 
             gl.deleteBuffer(posBuff);
             gl.deleteBuffer(normBuff);

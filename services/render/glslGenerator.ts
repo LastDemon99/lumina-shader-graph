@@ -10,32 +10,12 @@ const isVectorPreviewNodeType = (nodeType: string): boolean => {
 };
 
 // Helper to determine required extensions based on used nodes
-const getRequiredExtensions = (nodes: ShaderNode[], mode: 'fragment' | 'vertex'): string => {
-    const extensions = new Set<string>();
-
-    const needsDerivatives = nodes.some(n => getNodeModule(n.type)?.metadata?.requiresDerivatives);
-
-    // Check if any node potentially needs LOD logic
-    // This includes explicit LOD nodes, OR standard texture nodes used in Vertex Shader
-    // We strictly enable it if we might need it.
-    const needsLod = nodes.some(n => {
-        const metadata = getNodeModule(n.type)?.metadata;
-        if (!metadata) return false;
-
-        return (
-            metadata.requiresLod ||
-            (mode === 'vertex' && metadata.isTextureSampler)
-        );
-    });
-
-    // OES_standard_derivatives is Fragment Only
-    if (needsDerivatives && mode === 'fragment') extensions.add('#extension GL_OES_standard_derivatives : enable');
-
-    // EXT_shader_texture_lod can be used in Vertex for explicit LOD
-    if (needsLod) extensions.add('#extension GL_EXT_shader_texture_lod : enable');
-
-    return Array.from(extensions).join('\n') + (extensions.size > 0 ? '\n' : '');
+// WebGL2 / GLSL ES 3.00 includes derivatives and texture LOD in core.
+const getRequiredExtensions = (_nodes: ShaderNode[], _mode: 'fragment' | 'vertex'): string => {
+    return '';
 };
+
+const VERSION_HEADER = `#version 300 es`;
 
 const COMMON_HEADER = `
   precision highp float;
@@ -57,49 +37,20 @@ const COMMON_HEADER = `
     #define SQRT2 1.41421356237
   #endif
 
-  // Transpose Polyfills
-  mat2 transpose(mat2 m) {
-    return mat2(m[0].x, m[1].x, m[0].y, m[1].y);
-  }
-  mat3 transpose(mat3 m) {
-    return mat3(
-      m[0].x, m[1].x, m[2].x,
-      m[0].y, m[1].y, m[2].y,
-      m[0].z, m[1].z, m[2].z
-    );
-  }
-  mat4 transpose(mat4 m) {
-    return mat4(
-      m[0].x, m[1].x, m[2].x, m[3].x,
-      m[0].y, m[1].y, m[2].y, m[3].y,
-      m[0].z, m[1].z, m[2].z, m[3].z,
-      m[0].w, m[1].w, m[2].w, m[3].w
-    );
-  }
+    // transpose(...) is built-in in GLSL ES 3.00 (WebGL2)
   
-  // Texture LOD Polyfill/Macro for Fragment Shader
-  #ifdef GL_EXT_shader_texture_lod
-    #define texture2D_LOD(sampler, coord, lod) texture2DLodEXT(sampler, coord, lod)
-  #else
-    // Fallback for drivers missing the extension (ignores LOD)
-    #define texture2D_LOD(sampler, coord, lod) texture2D(sampler, coord)
-  #endif
+    // Texture LOD Polyfill/Macro (GLSL ES 3.00)
+    #define texture2D_LOD(sampler, coord, lod) textureLod(sampler, coord, lod)
 `;
 
 // GLSL compatibility shim:
-// WebGL 1.0 targets GLSL ES 1.00 where `texture()` doesn't exist.
-// Provide a function-like macro so user code can write `texture(sampler, uv)`.
-// - Fragment: maps to texture2D
-// - Vertex: maps to texture2D_LOD(..., 0.0) to match our vertex sampling convention
-const TEXTURE_FN_SHIM_FRAGMENT = `
-    #ifndef texture
-        #define texture(sampler, coord) texture2D(sampler, coord)
+// Keep legacy texture2D/texture2DLodEXT calls working under GLSL ES 3.00.
+const TEXTURE_COMPAT = `
+    #ifndef texture2D
+        #define texture2D(sampler, coord) texture(sampler, coord)
     #endif
-`;
-
-const TEXTURE_FN_SHIM_VERTEX = `
-    #ifndef texture
-        #define texture(sampler, coord) texture2D_LOD(sampler, coord, 0.0)
+    #ifndef texture2DLodEXT
+        #define texture2DLodEXT(sampler, coord, lod) textureLod(sampler, coord, lod)
     #endif
 `;
 
@@ -180,24 +131,46 @@ const UNIFORMS = `
   uniform int u_previewMode; // 0 = 2D (Unlit), 1 = 3D (Lit)
 `;
 
-const VARYINGS = `
-  varying vec2 vUv;
-  varying vec3 vPosition;
-  varying vec3 vNormal;
-  varying vec3 vTangent;
-  varying vec3 vBitangent;
-  varying vec4 vColor;
-  varying vec3 vObjectPosition;
-  varying vec3 vObjectNormal;
-  varying vec3 vObjectTangent;
+const VARYINGS_VERTEX = `
+    out vec2 vUv;
+    out vec3 vPosition;
+    out vec3 vNormal;
+    out vec3 vTangent;
+    out vec3 vBitangent;
+    out vec4 vColor;
+    out vec3 vObjectPosition;
+    out vec3 vObjectNormal;
+    out vec3 vObjectTangent;
+`;
+
+const VARYINGS_FRAGMENT = `
+    in vec2 vUv;
+    in vec3 vPosition;
+    in vec3 vNormal;
+    in vec3 vTangent;
+    in vec3 vBitangent;
+    in vec4 vColor;
+    in vec3 vObjectPosition;
+    in vec3 vObjectNormal;
+    in vec3 vObjectTangent;
 `;
 
 const ATTRIBUTES = `
-  attribute vec3 position;
-  attribute vec3 normal;
-  attribute vec2 uv;
-  attribute vec4 tangent;
-  attribute vec4 color;
+    in vec3 position;
+    in vec3 normal;
+    in vec2 uv;
+    in vec4 tangent;
+    in vec4 color;
+`;
+
+const FRAGMENT_OUTPUT = `
+    out vec4 fragColor;
+`;
+
+const FRAGMENT_COMPAT = `
+    #ifndef gl_FragColor
+        #define gl_FragColor fragColor
+    #endif
 `;
 
 // Helper to convert TypeScript values to GLSL strings
@@ -276,7 +249,7 @@ const castTo = (varName: string, from: string, to: string): string => {
         if (f === 'vec3') return `vec4(${varName}, 1.0)`;
     }
 
-    // Matrices (WebGL 1.0 / GLSL ES 1.0 compatible manual construction)
+    // Matrices (GLSL ES compatible manual construction)
     if (t === 'mat4') {
         if (f === 'mat3') return `mat4(vec4(${varName}[0], 0.0), vec4(${varName}[1], 0.0), vec4(${varName}[2], 0.0), vec4(0.0, 0.0, 0.0, 1.0))`;
         if (f === 'mat2') return `mat4(vec4(${varName}[0], 0.0, 0.0), vec4(${varName}[1], 0.0, 0.0), vec4(0.0, 0.0, 1.0, 0.0), vec4(0.0, 0.0, 0.0, 1.0))`;
@@ -548,7 +521,7 @@ const processGraph = (nodes: ShaderNode[], connections: Connection[], targetNode
 
             if (isVectorPreview) {
                 // Vectors (Normals, Positions, etc) show raw remapped data [0,1]
-                finalAssignment = `gl_FragColor = vec4(${resultVar} * 0.5 + 0.5, 1.0);`;
+                finalAssignment = `fragColor = vec4(${resultVar} * 0.5 + 0.5, 1.0);`;
             } else {
                 // Colors and Scalars: Use Master Lighting Model for visibility
                 functions.add(LIGHTING_FUNCTIONS);
@@ -563,9 +536,9 @@ const processGraph = (nodes: ShaderNode[], connections: Connection[], targetNode
                 body.push(`vec3 litPreview = applyLighting(${resultVar}, vNormal, viewDir, lightDir, lightColor, vec3(0.0), 0.5, 1.0);`);
 
                 // If u_previewMode is 0 (2D), use raw unlit result with gamma. If 1 (3D), use lit preview.
-                body.push(`vec3 unlitGamma = pow(max(${resultVar}, 0.0), vec3(0.4545));`);
-                body.push(`vec3 litPreviewGamma = pow(max(litPreview, 0.0), vec3(0.4545));`);
-                body.push(`gl_FragColor = u_previewMode == 1 ? vec4(litPreviewGamma, 1.0) : vec4(unlitGamma, 1.0);`);
+                body.push(`vec3 unlitRaw = max(${resultVar}, 0.0);`);
+                body.push(`vec3 litPreviewRaw = max(litPreview, 0.0);`);
+                body.push(`fragColor = u_previewMode == 1 ? vec4(litPreviewRaw, 1.0) : vec4(unlitRaw, 1.0);`);
             }
         }
     } else if (mode === 'fragment') {
@@ -598,19 +571,17 @@ const processGraph = (nodes: ShaderNode[], connections: Connection[], targetNode
             body.push(`
                 vec3 finalColor;
                 if (u_previewMode == 1) {
-                    // 3D Lit Mode with Gamma
+                    // 3D Lit Mode (No Gamma)
                     vec3 _finalLighting = max(lighting + ${emission}, 0.0);
-                    float _finalLuma = dot(_finalLighting, vec3(0.3333));
-                    vec3 _finalGamma = pow(_finalLighting, vec3(0.4545));
-                    finalColor = mix(_finalGamma, _finalLighting, smoothstep(0.0, 0.5, _finalLuma));
+                    finalColor = _finalLighting;
                 } else {
-                    // 2D Unlit Raw Mode (With Gamma, No Lighting)
-                    finalColor = pow(max(${color} + ${emission}, 0.0), vec3(0.4545));
+                    // 2D Unlit Raw Mode (No Lighting, No Gamma)
+                    finalColor = max(${color} + ${emission}, 0.0);
                 }
-                gl_FragColor = vec4(finalColor, ${alpha});
+                fragColor = vec4(finalColor, ${alpha});
             `.trim());
         } else {
-            finalAssignment = `gl_FragColor = vec4(1.0, 0.0, 1.0, 1.0);`;
+            finalAssignment = `fragColor = vec4(1.0, 0.0, 1.0, 1.0);`;
         }
     } else {
         const master = nodes.find(n => n.type === 'vertex');
@@ -672,14 +643,14 @@ const processGraph = (nodes: ShaderNode[], connections: Connection[], targetNode
 
     // Combine components
     const extensions = getRequiredExtensions(nodes, mode);
-    const textureShim = mode === 'vertex' ? TEXTURE_FN_SHIM_VERTEX : TEXTURE_FN_SHIM_FRAGMENT;
 
-    return `
-${extensions}
-${COMMON_HEADER}
-${textureShim}
+        return `${VERSION_HEADER}
+${extensions}${COMMON_HEADER}
+${TEXTURE_COMPAT}
 ${mode === 'vertex' ? ATTRIBUTES : ''}
-${VARYINGS}
+${mode === 'vertex' ? VARYINGS_VERTEX : VARYINGS_FRAGMENT}
+${mode === 'fragment' ? FRAGMENT_OUTPUT : ''}
+${mode === 'fragment' ? FRAGMENT_COMPAT : ''}
 ${UNIFORMS}
 ${Array.from(uniforms).join('\n')}
 
@@ -690,7 +661,7 @@ void main() {
 ${body.join('\n')}
 ${finalAssignment}
 }
-  `.trim();
+    `.trim();
 };
 
 export const generateGLSL = (nodes: ShaderNode[], connections: Connection[], targetNodeId: string): string => {

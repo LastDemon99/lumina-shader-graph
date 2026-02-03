@@ -16,27 +16,27 @@ interface PreviewProps {
   onRotationChange?: (rotation: { x: number; y: number }) => void;
 }
 
-const DEFAULT_VERT = `
+const DEFAULT_VERT = `#version 300 es
   precision highp float;
-  attribute vec3 position;
-  attribute vec2 uv;
-  attribute vec3 normal;
-  attribute vec4 tangent;
-  attribute vec4 color;
+  in vec3 position;
+  in vec2 uv;
+  in vec3 normal;
+  in vec4 tangent;
+  in vec4 color;
   
   uniform mat4 u_model;
   uniform mat4 u_view;
   uniform mat4 u_projection;
   
-  varying vec2 vUv;
-  varying vec3 vPosition;
-  varying vec3 vObjectPosition;
-  varying vec3 vNormal;
-  varying vec3 vTangent;
-  varying vec3 vBitangent;
-  varying vec3 vObjectNormal;
-  varying vec3 vObjectTangent;
-  varying vec4 vColor;
+  out vec2 vUv;
+  out vec3 vPosition;
+  out vec3 vObjectPosition;
+  out vec3 vNormal;
+  out vec3 vTangent;
+  out vec3 vBitangent;
+  out vec3 vObjectNormal;
+  out vec3 vObjectTangent;
+  out vec4 vColor;
 
   void main() {
     vUv = uv;

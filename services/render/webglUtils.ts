@@ -3,21 +3,15 @@
 
 // WebGL Boilerplate Utilities
 
-export const createWebGLContext = (canvas: HTMLCanvasElement): WebGLRenderingContext | null => {
+export const createWebGLContext = (canvas: HTMLCanvasElement): WebGL2RenderingContext | null => {
     // Try to get context, handle failure
-    const gl = canvas.getContext('webgl', {
+    const gl = canvas.getContext('webgl2', {
         preserveDrawingBuffer: false,
         antialias: true,
         alpha: true
     });
 
     if (!gl) return null;
-
-    // CRITICAL EXTENSIONS
-    // If these fail, the context might still work but shaders relying on them will fail
-    // In strict mode we could check for null return here
-    gl.getExtension('OES_standard_derivatives');
-    gl.getExtension('EXT_shader_texture_lod');
 
     // Enable Anisotropic Filtering for sharper textures at angles
     const extAniso = gl.getExtension('EXT_texture_filter_anisotropic') ||
@@ -41,7 +35,7 @@ export const createWebGLContext = (canvas: HTMLCanvasElement): WebGLRenderingCon
     return gl;
 };
 
-export const createShader = (gl: WebGLRenderingContext, type: number, source: string): WebGLShader | null => {
+export const createShader = (gl: WebGL2RenderingContext, type: number, source: string): WebGLShader | null => {
     const shader = gl.createShader(type);
     if (!shader) return null;
 
@@ -71,7 +65,7 @@ export const createShader = (gl: WebGLRenderingContext, type: number, source: st
     return shader;
 };
 
-export const createProgram = (gl: WebGLRenderingContext, vertSource: string, fragSource: string): WebGLProgram | null => {
+export const createProgram = (gl: WebGL2RenderingContext, vertSource: string, fragSource: string): WebGLProgram | null => {
     const vShader = createShader(gl, gl.VERTEX_SHADER, vertSource);
     const fShader = createShader(gl, gl.FRAGMENT_SHADER, fragSource);
 
@@ -122,7 +116,7 @@ const resizeToPOT = (image: HTMLImageElement): HTMLImageElement | HTMLCanvasElem
     return image;
 };
 
-export const createPlaceholderTexture = (gl: WebGLRenderingContext): WebGLTexture | null => {
+export const createPlaceholderTexture = (gl: WebGL2RenderingContext): WebGLTexture | null => {
     const tex = gl.createTexture();
     if (tex) {
         gl.bindTexture(gl.TEXTURE_2D, tex);
@@ -137,7 +131,7 @@ export const createPlaceholderTexture = (gl: WebGLRenderingContext): WebGLTextur
     return tex;
 };
 
-export const applyTextureParams = (gl: WebGLRenderingContext, tex: WebGLTexture, wrapStr: string = 'Repeat', filterStr: string = 'Linear') => {
+export const applyTextureParams = (gl: WebGL2RenderingContext, tex: WebGLTexture, wrapStr: string = 'Repeat', filterStr: string = 'Linear') => {
     gl.bindTexture(gl.TEXTURE_2D, tex);
 
     // Wrap
@@ -171,7 +165,7 @@ export const applyTextureParams = (gl: WebGLRenderingContext, tex: WebGLTexture,
     }
 };
 
-export const loadTexture = (gl: WebGLRenderingContext, src: string, wrap?: string, filter?: string, existingTex?: WebGLTexture): WebGLTexture | null => {
+export const loadTexture = (gl: WebGL2RenderingContext, src: string, wrap?: string, filter?: string, existingTex?: WebGLTexture): WebGLTexture | null => {
     const tex = existingTex || gl.createTexture();
     if (!tex) return null;
 

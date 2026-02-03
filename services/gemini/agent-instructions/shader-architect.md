@@ -345,7 +345,7 @@ Exception: For `customFunction`, socket IDs may be defined per-node. In that cas
 - The function must define exactly one entry point: `void main(...)`.
 - Inputs (Arguments): must match the node's input sockets count/order.
 - Outputs (Out Params): must be declared with `out` (and match output sockets count/order).
-- Textures: WebGL 1.0 limitation: do not pass `sampler2D` around and do not use `out sampler2D`.
+- Textures: GLSL limitation: do not pass `sampler2D` around and do not use `out sampler2D`.
 	- In Lumina graphs, treat texture data flowing into custom functions as an already sampled color (`vec4`).
 	- Sample textures using built-in texture sampling nodes, then feed the resulting `vec4` into `customFunction`.
 - Preview consistency: `gl_FragCoord` is normalized internally for node previews (viewport-local), so user code does not need special-casing.
