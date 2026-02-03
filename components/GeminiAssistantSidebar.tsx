@@ -1,5 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { Send, Paperclip, Mic, X, ChevronLeft, ChevronRight, Sparkles, Image as ImageIcon, Loader2, Play, Plus, Network, Wand2, FilePlus, Settings } from 'lucide-react';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 
 export interface SessionAsset {
     id: string;
@@ -579,7 +581,42 @@ export const GeminiAssistantSidebar: React.FC<GeminiAssistantSidebarProps> = ({
                                             )}
                                         </div>
                                     )}
-                                    <div className="whitespace-pre-wrap">{msg.content}</div>
+                                    <div className="markdown-body text-xs md:text-sm">
+                                        <ReactMarkdown
+                                            remarkPlugins={[remarkGfm]}
+                                            components={{
+                                                code({ node, inline, className, children, ...props }: any) {
+                                                    const match = /language-(\w+)/.exec(className || '')
+                                                    return !inline && match ? (
+                                                        <div className="relative group">
+                                                            <div className="absolute right-2 top-2 text-[10px] text-gray-500 font-mono opacity-0 group-hover:opacity-100 transition-opacity">
+                                                                {match[1]}
+                                                            </div>
+                                                            <code className={`${className} block bg-black/30 p-2 rounded mb-2 overflow-x-auto`} {...props}>
+                                                                {children}
+                                                            </code>
+                                                        </div>
+                                                    ) : (
+                                                        <code className="bg-black/30 px-1 py-0.5 rounded font-mono text-[11px]" {...props}>
+                                                            {children}
+                                                        </code>
+                                                    )
+                                                },
+                                                p: ({ children }) => <p className="mb-2 last:mb-0">{children}</p>,
+                                                ul: ({ children }) => <ul className="list-disc pl-4 mb-2">{children}</ul>,
+                                                ol: ({ children }) => <ol className="list-decimal pl-4 mb-2">{children}</ol>,
+                                                li: ({ children }) => <li className="mb-0.5">{children}</li>,
+                                                h1: ({ children }) => <h1 className="text-lg font-bold mb-2 mt-4 border-b border-gray-700 pb-1">{children}</h1>,
+                                                h2: ({ children }) => <h2 className="text-base font-bold mb-2 mt-3">{children}</h2>,
+                                                h3: ({ children }) => <h3 className="text-sm font-bold mb-1 mt-2">{children}</h3>,
+                                                blockquote: ({ children }) => <blockquote className="border-l-2 border-indigo-500 pl-3 italic text-gray-400 my-2">{children}</blockquote>,
+                                                a: ({ href, children }) => <a href={href} className="text-indigo-400 hover:underline" target="_blank" rel="noopener noreferrer">{children}</a>,
+                                                strong: ({ children }) => <strong className="font-bold text-indigo-300">{children}</strong>
+                                            }}
+                                        >
+                                            {msg.content}
+                                        </ReactMarkdown>
+                                    </div>
 
                                     {msg.debug && (
                                         <details className="mt-3 border-t border-gray-700 pt-2">
