@@ -843,6 +843,12 @@ const App: React.FC = () => {
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
+      const isTextTarget = (el: HTMLElement | null | undefined) => {
+        if (!el) return false;
+        const tag = el.tagName;
+        return tag === 'INPUT' || tag === 'TEXTAREA' || Boolean((el as any).isContentEditable);
+      };
+
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
         e.preventDefault();
         saveGraph(e.shiftKey);
@@ -855,16 +861,37 @@ const App: React.FC = () => {
       }
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'c') {
         const target = e.target as HTMLElement;
-        if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA') return;
-        e.preventDefault();
-        copySelection();
+        if (isTextTarget(target)) return;
+
+        const selection = window.getSelection();
+        const hasSelectedText = Boolean(selection && selection.toString().length > 0);
+        const hasNodeSelection = selectedNodeIds.size > 0 && activeTab === 'graph';
+
+        // If there are nodes selected, always update the internal node clipboard.
+        // If there is also text selected, let the browser copy the text normally.
+        if (hasNodeSelection) {
+          copySelection();
+        }
+        if (hasSelectedText) return;
+
+        // No text selection: in graph mode, Ctrl+C should copy nodes.
+        if (hasNodeSelection) {
+          e.preventDefault();
+          return;
+        }
+
         return;
       }
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'v') {
         const target = e.target as HTMLElement;
-        if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA') return;
-        e.preventDefault();
-        pasteSelection();
+        if (isTextTarget(target)) return;
+
+        const hasNodeClipboard = Boolean(clipboard && clipboard.nodes && clipboard.nodes.length > 0);
+        if (activeTab === 'graph' && hasNodeClipboard) {
+          e.preventDefault();
+          pasteSelection();
+          return;
+        }
         return;
       }
       if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === 'n') {
@@ -874,7 +901,7 @@ const App: React.FC = () => {
       }
 
       const target = e.target as HTMLElement;
-      if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA') return;
+  if (isTextTarget(target)) return;
 
       if (e.key === 'Delete' || e.key === 'Backspace') {
         if (selectedNodeIds.size > 0 && activeTab === 'graph') {
