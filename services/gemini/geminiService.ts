@@ -246,6 +246,12 @@ export class GeminiService {
     if (!ai) return;
 
     const softwareContext = `AVAILABLE_NODES:\n${this.definitions}\n\nSCOPE: Lumina Shader Graph (WebGL 2.0).`;
+
+    // OPTIMIZATION: If the consultant session is not active, we don't need to sync history.
+    if (!this.persistentConsultantChat) {
+      return;
+    }
+
     const systemInstruction = this.buildSystemInstruction('consultant', softwareContext);
     const chat = await this.getOrCreatePersistentConsultantChat(ai, systemInstruction, onLog);
 
