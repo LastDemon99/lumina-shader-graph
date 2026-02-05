@@ -8,7 +8,7 @@ import { GeminiAssistantSidebar, SessionAsset } from './components/GeminiAssista
 import { generateFragmentShader, generateVertexShader } from './services/render/glslGenerator';
 import { geminiService } from './services/gemini/geminiService';
 import { lintGraph } from './services/gemini/linter';
-import { ShaderNode, Connection, Viewport, NodeType, SocketType } from './types';
+import { ShaderNode, Connection, Viewport, NodeType, SocketType, SocketDef } from './types';
 import { INITIAL_NODES, INITIAL_CONNECTIONS } from './initialGraph';
 import { NODE_LIST, getNodeModule } from './nodes';
 import { getEffectiveSockets } from './nodes/runtime';
@@ -1218,7 +1218,9 @@ const App: React.FC = () => {
 
     const mapType = (glslType: string) => {
       const t = glslType.trim();
-      if (t === 'float' || t === 'vec2' || t === 'vec3' || t === 'vec4' || t === 'mat2' || t === 'mat3' || t === 'mat4') return t;
+      if (t === 'float' || t === 'int' || t === 'vec2' || t === 'vec3' || t === 'vec4' || t === 'mat2' || t === 'mat3' || t === 'mat4') {
+        return t === 'int' ? 'float' : t;
+      }
       if (t === 'color') return 'color';
       if (t === 'sampler2D') return 'texture';
       if (t === 'sampler2DArray') return 'textureArray';
@@ -1235,14 +1237,28 @@ const App: React.FC = () => {
 
     const inputs: any[] = [];
     const outputs: any[] = [];
+    const skipQualifiers = new Set(['in', 'const', 'flat', 'smooth', 'noperspective', 'centroid', 'patch', 'sample']);
 
     for (const arg of args) {
-      // Qualifiers we care about: out / inout (others are ignored)
-      const tokens = arg.split(/\s+/).filter(Boolean);
+      const cleanedArg = arg.replace(/layout\s*\([^)]*\)\s*/g, ' ').trim();
+      const tokens = cleanedArg.split(/\s+/).filter(Boolean);
       if (tokens.length < 2) continue;
 
       let idx = 0;
-      const qualifier = tokens[idx] === 'out' || tokens[idx] === 'inout' ? tokens[idx++] : null;
+      let qualifier: 'out' | 'inout' | null = null;
+      while (idx < tokens.length - 1) {
+        const token = tokens[idx];
+        if (token === 'out' || token === 'inout') {
+          qualifier = token;
+          idx++;
+          continue;
+        }
+        if (skipQualifiers.has(token)) {
+          idx++;
+          continue;
+        }
+        break;
+      }
 
       const typeToken = tokens[idx++];
       const nameToken = tokens[idx++];
@@ -1266,14 +1282,44 @@ const App: React.FC = () => {
     const nextInputs = (parsed && parsed.inputs.length > 0) ? parsed.inputs : data.inputs;
     const nextOutputs = (parsed && parsed.outputs.length > 0) ? parsed.outputs : data.outputs;
 
+    const diffSockets = (oldList: SocketDef[] = [], newList: SocketDef[] = []) => {
+      const map: Record<string, string> = {};
+      const removed = new Set<string>();
+      const limit = Math.min(oldList.length, newList.length);
+      for (let i = 0; i < limit; i++) {
+        const oldId = oldList[i]?.id;
+        const newId = newList[i]?.id;
+        if (oldId && newId && oldId !== newId) {
+          map[oldId] = newId;
+        }
+      }
+      for (let i = limit; i < oldList.length; i++) {
+        const oldId = oldList[i]?.id;
+        if (oldId) removed.add(oldId);
+      }
+      return { map, removed };
+    };
+
+    let inputRemap: Record<string, string> = {};
+    let outputRemap: Record<string, string> = {};
+    const removedInputIds = new Set<string>();
+    const removedOutputIds = new Set<string>();
+
     setNodes(prev => prev.map(n => {
       if (n.id === nodeId) {
         const defaultLabel = getNodeModule('customFunction')?.definition?.label || 'Custom Function';
-        // Don't replace the node's display label with the function name (e.g. "main").
-        // If an older graph had label == functionName, restore the default label.
         const nextLabel = (n.type === 'customFunction' && (n.label === data.functionName || !n.label))
           ? defaultLabel
           : n.label;
+
+        const { map: inMap, removed: inRemoved } = diffSockets(Array.isArray(n.inputs) ? n.inputs : [], nextInputs);
+        inputRemap = { ...inputRemap, ...inMap };
+        inRemoved.forEach(id => removedInputIds.add(id));
+
+        const { map: outMap, removed: outRemoved } = diffSockets(Array.isArray(n.outputs) ? n.outputs : [], nextOutputs);
+        outputRemap = { ...outputRemap, ...outMap };
+        outRemoved.forEach(id => removedOutputIds.add(id));
+
         return {
           ...n,
           label: nextLabel,
@@ -1290,6 +1336,37 @@ const App: React.FC = () => {
       }
       return n;
     }));
+
+    const needsConnectionUpdate = Object.keys(inputRemap).length > 0 || removedInputIds.size > 0 || Object.keys(outputRemap).length > 0 || removedOutputIds.size > 0;
+    if (needsConnectionUpdate) {
+      setConnections(prev => prev.reduce<Connection[]>((acc, conn) => {
+        let updated = conn;
+        let shouldDrop = false;
+
+        if (conn.targetNodeId === nodeId) {
+          const mapped = inputRemap[conn.targetSocketId];
+          if (mapped) {
+            updated = { ...updated, targetSocketId: mapped };
+          } else if (removedInputIds.has(conn.targetSocketId)) {
+            shouldDrop = true;
+          }
+        }
+
+        if (conn.sourceNodeId === nodeId) {
+          const mapped = outputRemap[conn.sourceSocketId];
+          if (mapped) {
+            updated = { ...updated, sourceSocketId: mapped };
+          } else if (removedOutputIds.has(conn.sourceSocketId)) {
+            shouldDrop = true;
+          }
+        }
+
+        if (shouldDrop) return acc;
+        acc.push(updated);
+        return acc;
+      }, []));
+    }
+
     setLinterLogs(prev => [...prev, `Custom Function "${data.functionName}" saved and recompiled.`]);
   }, []);
 

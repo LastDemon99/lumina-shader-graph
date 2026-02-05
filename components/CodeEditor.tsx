@@ -1,6 +1,6 @@
-import React, { useState, useEffect } from 'react';
+import React, { useRef, useState, useEffect } from 'react';
 import { ShaderNode, SocketDef, SocketType } from '../types';
-import { Save, X, Code2, Plus, Trash2, Info } from 'lucide-react';
+import { X, Code2 } from 'lucide-react';
 
 interface CodeEditorProps {
     node: ShaderNode | null;
@@ -14,6 +14,7 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({ node, onSave, onClose })
     const [code, setCode] = useState('');
     const [inputs, setInputs] = useState<SocketDef[]>([]);
     const [outputs, setOutputs] = useState<SocketDef[]>([]);
+    const saveTimerRef = useRef<number | null>(null);
 
     // CRITICAL: Only reset state when switching to a DIFFERENT node id
     useEffect(() => {
@@ -23,6 +24,25 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({ node, onSave, onClose })
             setOutputs(node.outputs || []);
         }
     }, [node?.id]);
+
+    useEffect(() => {
+        if (!node) return;
+        if (saveTimerRef.current) {
+            window.clearTimeout(saveTimerRef.current);
+            saveTimerRef.current = null;
+        }
+        saveTimerRef.current = window.setTimeout(() => {
+            const functionName = node.data?.functionName || 'main';
+            onSave(node.id, { code, functionName, inputs, outputs });
+            saveTimerRef.current = null;
+        }, 650);
+        return () => {
+            if (saveTimerRef.current) {
+                window.clearTimeout(saveTimerRef.current);
+                saveTimerRef.current = null;
+            }
+        };
+    }, [code, inputs, outputs, node?.id, node?.data?.functionName, onSave]);
 
     if (!node) return null;
 
@@ -75,12 +95,7 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({ node, onSave, onClose })
                 </div>
 
                 <div className="flex items-center gap-2">
-                    <button
-                        onClick={() => onSave(node.id, { code, functionName: 'main', inputs, outputs })}
-                        className="flex items-center gap-2 px-4 py-1.5 bg-blue-600 hover:bg-blue-500 text-white rounded shadow-lg shadow-blue-500/20 text-xs font-bold transition-all active:scale-95"
-                    >
-                        <Save className="w-3.5 h-3.5" /> Save Changes
-                    </button>
+                    <span className="text-[10px] text-gray-400 font-semibold uppercase tracking-wider">Auto-saving changes</span>
                     <button
                         onClick={onClose}
                         className="p-1.5 hover:bg-white/5 rounded text-gray-500 hover:text-gray-300 transition-colors"
