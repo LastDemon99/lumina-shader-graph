@@ -1,6 +1,11 @@
 import React, { useRef, useState, useEffect } from 'react';
 import { ShaderNode, SocketDef, SocketType } from '../types';
-import { X, Code2 } from 'lucide-react';
+import Editor from 'react-simple-code-editor';
+import Prism from 'prismjs';
+import 'prismjs/components/prism-clike';
+import 'prismjs/components/prism-c';
+import 'prismjs/components/prism-glsl';
+import 'prismjs/themes/prism-tomorrow.css';
 
 interface CodeEditorProps {
     node: ShaderNode | null;
@@ -46,89 +51,50 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({ node, onSave, onClose })
 
     if (!node) return null;
 
-    const addInput = () => {
-        const id = `in${inputs.length + 1}`;
-        setInputs([...inputs, { id, label: id, type: 'float' }]);
-    };
-
-    const addOutput = () => {
-        const id = `out${outputs.length + 1}`;
-        setOutputs([...outputs, { id, label: id, type: 'float' }]);
-    };
-
-    const removeInput = (index: number) => {
-        setInputs(inputs.filter((_, i) => i !== index));
-    };
-
-    const removeOutput = (index: number) => {
-        setOutputs(outputs.filter((_, i) => i !== index));
-    };
-
-    const updateSocket = (isInput: boolean, index: number, field: keyof SocketDef, value: string) => {
-        const list = isInput ? [...inputs] : [...outputs];
-        list[index] = { ...list[index], [field]: value };
-        if (isInput) setInputs(list);
-        else setOutputs(list);
-    };
-
-    // NOTE: In this shader-graph, sockets typed as 'texture' do not behave like a GLSL sampler variable.
-    // They represent an already-sampled color in most node previews (vec4), because GLSL doesn't allow
-    // passing sampler2D values around nor using out sampler2D parameters.
-    const glslParamType = (t: string) => {
-        if (t === 'texture' || t === 'textureArray') return 'vec4';
-        if (t === 'color') return 'vec3';
-        return t;
+    const highlightCode = (code: string) => {
+        // Fallback to clike if glsl is not loaded for some reason
+        const lang = Prism.languages.glsl || Prism.languages.clike || {};
+        return Prism.highlight(code, lang, 'glsl');
     };
 
     return (
-        <div className="flex-1 flex flex-col bg-[#0d0d0d] animate-in slide-in-from-right duration-300">
-            {/* Header */}
-            <div className="h-12 border-b border-gray-800 flex items-center justify-between px-6 bg-[#141414]">
-                <div className="flex items-center gap-3">
-                    <div className="p-1.5 bg-blue-500/10 rounded">
-                        <Code2 className="w-4 h-4 text-blue-400" />
-                    </div>
-                    <div className="flex flex-col">
-                        <span className="text-xs font-bold text-gray-200 uppercase tracking-wider">Node Script Editor</span>
-                        <span className="text-[10px] text-gray-500 font-mono">NODE_UID: {node.id}</span>
-                    </div>
-                </div>
+        <div className="flex-1 flex overflow-auto bg-[#050505] scrollbar-thin scrollbar-thumb-gray-800 scrollbar-track-transparent animate-in fade-in duration-300">
+            <div className="min-h-full w-full font-mono text-sm leading-relaxed relative">
+                <Editor
+                    value={code}
+                    onValueChange={code => setCode(code)}
+                    highlight={highlightCode}
+                    padding={32}
+                    style={{
+                        fontFamily: '"Fira Code", "Fira Mono", "Cascadia Code", "Source Code Pro", monospace',
+                        fontSize: 14,
+                        minHeight: '100%',
+                    }}
+                    className="prism-editor"
+                    textareaClassName="outline-none"
+                    preClassName="pointer-events-none"
+                />
 
-                <div className="flex items-center gap-2">
-                    <span className="text-[10px] text-gray-400 font-semibold uppercase tracking-wider">Auto-saving changes</span>
-                    <button
-                        onClick={onClose}
-                        className="p-1.5 hover:bg-white/5 rounded text-gray-500 hover:text-gray-300 transition-colors"
-                    >
-                        <X className="w-5 h-5" />
-                    </button>
-                </div>
-            </div>
-
-            <div className="flex-1 flex overflow-hidden">
-                {/* Editor Area (full width after removing left panel) */}
-                <div className="flex-1 relative bg-[#050505]">
-                    <textarea
-                        className="absolute inset-0 w-full h-full bg-transparent text-gray-300 font-mono text-sm p-8 outline-none resize-none focus:ring-0 scrollbar-thin overflow-y-auto leading-relaxed"
-                        value={code}
-                        onChange={(e) => setCode(e.target.value)}
-                        spellCheck={false}
-                        autoFocus
-                        placeholder="// Escribe tu GLSL aquí siguiendo la convención main..."
-                    />
-                </div>
-            </div>
-
-            {/* Footer */}
-            <div className="h-10 border-t border-gray-800 flex items-center px-6 bg-[#0a0a0a] text-[10px] text-gray-500 gap-6">
-                <div className="flex items-center gap-2">
-                    <div className="w-1.5 h-1.5 rounded-full bg-blue-500" />
-                    <span>Namespace Isolation Active</span>
-                </div>
-                <span className="text-gray-700">|</span>
-                <div className="flex gap-4 italic text-gray-600">
-                    <span>El compilador mapeará automáticamente `void main` a un ID único para evitar colisiones.</span>
-                </div>
+                <style>{`
+                    .prism-editor textarea {
+                        background: transparent !important;
+                        color: transparent !important;
+                        caret-color: #fff !important;
+                        z-index: 1 !important;
+                    }
+                    .prism-editor pre {
+                        z-index: 0 !important;
+                    }
+                    /* Custom Prism Overrides for a more "Lumina" look */
+                    .token.keyword { color: #818cf8; font-weight: bold; }
+                    .token.function { color: #60a5fa; }
+                    .token.number { color: #f472b6; }
+                    .token.builtin { color: #fbbf24; }
+                    .token.operator { color: #94a3b8; }
+                    .token.comment { color: #4b5563; font-style: italic; }
+                    .token.string { color: #34d399; }
+                    .token.type { color: #fb7185; }
+                `}</style>
             </div>
         </div>
     );
