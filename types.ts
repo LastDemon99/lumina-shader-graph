@@ -1,6 +1,8 @@
 
 export type SocketType = 'float' | 'vec2' | 'vec3' | 'vec4' | 'color' | 'texture' | 'textureArray' | 'sampler' | 'gradient' | 'mat2' | 'mat3' | 'mat4' | 'samplerState';
 
+export type GenerationPhase = 'idle' | 'routing' | 'drafting' | 'linting' | 'refining';
+
 export interface SocketDef {
   id: string;
   label: string;
@@ -184,6 +186,14 @@ export interface Connection {
   sourceSocketId: string;
   targetNodeId: string;
   targetSocketId: string;
+}
+
+export interface SessionAsset {
+  id: string;
+  name: string;
+  dataUrl: string;
+  mimeType: string;
+  createdAt: number;
 }
 
 export interface Viewport {

@@ -2,14 +2,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import { Send, Paperclip, Mic, X, ChevronLeft, ChevronRight, Sparkles, Image as ImageIcon, Loader2, Play, Plus, Network, Wand2, FilePlus, Settings } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-
-export interface SessionAsset {
-    id: string;
-    name: string;
-    dataUrl: string;
-    mimeType: string;
-    createdAt: number;
-}
+import { SessionAsset, GenerationPhase } from '../types';
 
 interface Message {
     id: string;
@@ -70,7 +63,7 @@ interface GeminiAssistantSidebarProps {
         chatContext?: Array<{ role: 'user' | 'assistant' | 'system'; content: string }>,
         selectedAssetId?: string
     ) => void;
-    generationPhase: 'idle' | 'drafting' | 'linting' | 'refining';
+    generationPhase: GenerationPhase;
     logs: string[];
     lastAssistantResponse?: string | null;
     lastMeta?: any;
@@ -98,13 +91,15 @@ export const GeminiAssistantSidebar: React.FC<GeminiAssistantSidebarProps> = ({
     onClearAttachedNodes,
 }) => {
     const phaseLabel =
-        generationPhase === 'drafting'
-            ? 'Analyzing Request & Planning...'
-            : generationPhase === 'linting'
-                ? 'Validating Graph Structure...'
-                : generationPhase === 'refining'
-                    ? 'Refining & Polishing...'
-                    : '';
+        generationPhase === 'routing'
+            ? 'Analyzing Request...'
+            : generationPhase === 'drafting'
+                ? 'Planning...'
+                : generationPhase === 'linting'
+                    ? 'Validating Graph Structure...'
+                    : generationPhase === 'refining'
+                        ? 'Refining & Polishing...'
+                        : '';
 
     const [collapsed, setCollapsed] = useState(false);
     const [activePanel, setActivePanel] = useState<'chat' | 'assets'>('chat');

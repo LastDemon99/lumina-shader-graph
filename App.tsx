@@ -4,11 +4,11 @@ import { Node } from './components/Node';
 import { Preview } from './components/Preview';
 import { SceneView } from './components/SceneView';
 import { GlobalCanvas } from './components/GlobalCanvas'; // Import Global Canvas
-import { GeminiAssistantSidebar, SessionAsset } from './components/GeminiAssistantSidebar';
+import { GeminiAssistantSidebar } from './components/GeminiAssistantSidebar';
 import { generateFragmentShader, generateVertexShader } from './services/render/glslGenerator';
 import { geminiService } from './services/gemini/geminiService';
 import { lintGraph } from './services/gemini/linter';
-import { ShaderNode, Connection, Viewport, NodeType, SocketType, SocketDef } from './types';
+import { ShaderNode, Connection, Viewport, NodeType, SocketType, SocketDef, SessionAsset, GenerationPhase } from './types';
 import { INITIAL_NODES, INITIAL_CONNECTIONS } from './initialGraph';
 import { NODE_LIST, getNodeModule } from './nodes';
 import { getEffectiveSockets } from './nodes/runtime';
@@ -212,7 +212,7 @@ const App: React.FC = () => {
 
 
   // AI Status State
-  const [generationPhase, setGenerationPhase] = useState<'idle' | 'drafting' | 'linting' | 'refining'>('idle');
+  const [generationPhase, setGenerationPhase] = useState<GenerationPhase>('idle');
   const [linterLogs, setLinterLogs] = useState<string[]>([]);
 
   // Session Asset Library (in-memory)
@@ -540,34 +540,56 @@ const App: React.FC = () => {
     const offsetX = useMouse ? graphMouseX - minX : 50;
     const offsetY = useMouse ? graphMouseY - minY : 50;
 
+    const getNextNodeId = (type: string, existingNodes: ShaderNode[]) => {
+      let i = 0;
+      const prefix = type ? `${type}_` : 'n';
+      while (existingNodes.some(n => n.id === `${prefix}${i}`)) i++;
+      return `${prefix}${i}`;
+    };
+
+    const getNextConnId = (existingConns: Connection[]) => {
+      let i = 0;
+      while (existingConns.some(c => c.id === `c${i}`)) i++;
+      return `c${i}`;
+    };
+
     const idMap = new Map<string, string>();
     const newNodes: ShaderNode[] = [];
+    let currentNodesSnapshot = [...nodes];
 
     clipboard.nodes.forEach(node => {
-      const newId = `${node.type}-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`;
+      const newId = getNextNodeId(node.type, currentNodesSnapshot);
       idMap.set(node.id, newId);
-      newNodes.push({
+      const newNode = {
         ...node,
         id: newId,
         x: node.x + offsetX,
         y: node.y + offsetY,
         data: JSON.parse(JSON.stringify(node.data))
-      });
+      };
+      newNodes.push(newNode);
+      currentNodesSnapshot.push(newNode);
     });
 
-    const newConnections: Connection[] = clipboard.connections.map(conn => ({
-      id: `conn-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`,
-      sourceNodeId: idMap.get(conn.sourceNodeId)!,
-      targetNodeId: idMap.get(conn.targetNodeId)!,
-      sourceSocketId: conn.sourceSocketId,
-      targetSocketId: conn.targetSocketId
-    }));
+    let currentConnsSnapshot = [...connections];
+    const newConnections: Connection[] = clipboard.connections.map(conn => {
+      const newId = getNextConnId(currentConnsSnapshot);
+      const newConn = {
+        id: newId,
+        sourceNodeId: idMap.get(conn.sourceNodeId)!,
+        targetNodeId: idMap.get(conn.targetNodeId)!,
+        sourceSocketId: conn.sourceSocketId,
+        targetSocketId: conn.targetSocketId
+      };
+      currentConnsSnapshot.push(newConn);
+      return newConn;
+    });
 
     setNodes(prev => [...prev, ...newNodes]);
     setConnections(prev => [...prev, ...newConnections]);
     setSelectedNodeIds(new Set(newNodes.map(n => n.id)));
 
-  }, [clipboard, mousePos, viewport]);
+  }, [clipboard, mousePos, viewport, nodes, connections]);
 
   // --- File Save/Load Logic ---
 
@@ -901,7 +923,7 @@ const App: React.FC = () => {
       }
 
       const target = e.target as HTMLElement;
-  if (isTextTarget(target)) return;
+      if (isTextTarget(target)) return;
 
       if (e.key === 'Delete' || e.key === 'Backspace') {
         if (selectedNodeIds.size > 0 && activeTab === 'graph') {
@@ -1373,7 +1395,11 @@ const App: React.FC = () => {
   const addNode = (type: NodeType, clientX?: number, clientY?: number) => {
     const mod = getNodeModule(type);
     const def = getDefinitionOrPlaceholder(type);
-    const id = `${type}-${Date.now()}`;
+
+    let i = 0;
+    const prefix = type ? `${type}_` : 'n';
+    while (nodes.some(n => n.id === `${prefix}${i}`)) i++;
+    const id = `${prefix}${i}`;
 
     // Determine position: Mouse Pos or Center Screen
     let x = 0;
@@ -1425,12 +1451,20 @@ const App: React.FC = () => {
     return { x: node.x + (isInput ? -9 : 169), y: node.y + 50 };
   };
 
-  const runGeminiPipeline = async (prompt: string, attachment?: string) => {
+  const runGeminiPipeline = async (prompt: string, attachment?: string, selectedAssetId?: string) => {
     if (!prompt && !attachment) return;
+
+    let finalPrompt = prompt;
+    if (selectedAssetId) {
+      const asset = sessionAssets.find(a => a.id === selectedAssetId);
+      if (asset) {
+        finalPrompt = `[CONTEXT: The attached image is asset ID "${asset.id}" (name: "${asset.name}")]\n${prompt}`;
+      }
+    }
 
     suppressManualHistoryRef.current = true;
     setGenerationPhase('drafting');
-    setLinterLogs(['Analyzing request...']);
+    setLinterLogs(['Planning...']);
 
     const handleLog = (msg: string) => {
       setLinterLogs(prev => [...prev, msg]);
@@ -1467,7 +1501,7 @@ const App: React.FC = () => {
       // Small tick to ensure React state update -> DOM update -> Canvas render
       await new Promise(r => requestAnimationFrame(r));
 
-      const isAnimated = /agua|movimiento|onda|fluir|viento|anima|time|tiempo/i.test(prompt);
+      const isAnimated = /agua|movimiento|onda|fluir|viento|anima|time|tiempo/i.test(finalPrompt);
 
       if (isAnimated) {
         // Capture 5 frames over 2 seconds for motion analysis
@@ -1478,7 +1512,7 @@ const App: React.FC = () => {
       }
     };
 
-    const result = await geminiService.generateOrModifyGraph(prompt, nodes, connections, attachment, handleLog, handleUpdate, handleVisualRequest);
+    const result = await geminiService.generateOrModifyGraph(finalPrompt, nodes, connections, sessionAssets, attachment, handleLog, handleUpdate, handleVisualRequest);
     const draft = (result as any)?.graph ?? result;
     const responseText = (result as any)?.responseText as string | undefined;
     const meta = (result as any)?.meta as any | undefined;
@@ -1596,7 +1630,7 @@ const App: React.FC = () => {
     const cleanPrompt = String(texturePrompt || '').trim();
     if (!cleanPrompt && !referenceAttachment) return;
 
-    setGenerationPhase('drafting');
+    setGenerationPhase('routing');
     setLinterLogs(['Inferring texture intent...']);
 
     const handleLog = (msg: string) => setLinterLogs(prev => [...prev, msg]);
@@ -1612,6 +1646,7 @@ const App: React.FC = () => {
       handleLog(`Target: ${targetNodeId}.${targetSocketId} (${operation}, channel=${channel})`);
 
       setLinterLogs(prev => [...prev, 'Generating texture...']);
+      setGenerationPhase('drafting');
       const generated = await geminiService.generateTextureDataUrl(imagePrompt, referenceAttachment, handleLog);
       if (!generated?.dataUrl) {
         handleLog('Texture generation failed.');
@@ -1661,7 +1696,8 @@ const App: React.FC = () => {
 
     let inferredCmd: string | undefined;
     if (!isSlash) {
-      const intent = await geminiService.inferGlobalIntent(prompt);
+      setGenerationPhase('routing');
+      const intent = await geminiService.inferGlobalIntent(prompt, attachment);
       if (intent && intent.confidence >= 0.7) {
         setLinterLogs(prev => [...prev, `Router: inferred ${intent.command} (${Math.round(intent.confidence * 100)}% confidence)`]);
         inferredCmd = intent.command;
@@ -1693,7 +1729,7 @@ const App: React.FC = () => {
 
     if (handled) return;
 
-    await runGeminiPipeline(effectivePrompt, attachment);
+    await runGeminiPipeline(effectivePrompt, attachment, selectedAssetId);
   };
 
   const renderConnections = () => {

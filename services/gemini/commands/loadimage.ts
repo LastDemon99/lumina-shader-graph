@@ -22,28 +22,37 @@ export async function runLoadImage(inv: CommandInvocation, ctx: CommandContext):
         return true;
     }
 
-    ctx.setGenerationPhase('drafting');
+    ctx.setGenerationPhase('routing');
     const handleLog = (msg: string) => ctx.setLinterLogs(prev => [...prev, msg]);
 
     try {
         console.log('[LoadAsset] User Intent Text:', userIntent);
-        const intent = await ctx.geminiService.inferLoadAssetIntent(userIntent, handleLog);
+        const intent = await ctx.geminiService.inferLoadAssetIntent(userIntent, ctx.sessionAssets, inv.attachment, handleLog);
         console.log('[LoadAsset] Inferred Intent Object:', intent);
 
-        if (intent?.apply) {
-            console.log('[LoadAsset] Action: Delegating to Editor agent.');
-            handleLog('Intent detected: Apply to graph. Passing to Editor agent...');
+        if (intent && (intent.action === 'apply' || intent.action === 'edit')) {
+            const isEdit = intent.action === 'edit';
+            const isAi = intent.method === 'ai';
 
-            // We pass it to the Editor agent (which uses gemini-3-flash-preview by default for edits)
-            // We explicitly mention the attachment is the new asset to be applied.
-            const editorPrompt = `The user just loaded a new image asset and wants to use it. 
-User request: ${userIntent}
-Action: Add a texture node using the attached asset and connect it according to the request.`;
+            handleLog(`Strategy: ${intent.action} via ${intent.method.toUpperCase()} (${Math.round(intent.confidence * 100)}% confidence).`);
+            if (intent.reasoning) console.log('[LoadAsset] Reasoning:', intent.reasoning);
 
-            await ctx.runGeminiPipeline(editorPrompt, inv.attachment);
+            if (isAi && isEdit) {
+                // Generative AI modification (Image-to-Image)
+                handleLog('Delegating to AI Texture Pipeline (Image-to-Image)...');
+                await ctx.runGeminiTexturePipeline(userIntent, inv.attachment);
+            } else {
+                // Procedural/Graph modification or simple apply
+                handleLog(`Delegating to Graph Editor Agent (${isEdit ? 'Modification' : 'Placement'})...`);
+                const editorPrompt = isEdit
+                    ? `The user just loaded an image and wants to EDIT it using shader nodes. Request: ${userIntent}. Action: Add the asset and build the node logic to achieve the effect.`
+                    : `The user just loaded a new image asset and wants to use it as is. Request: ${userIntent}. Action: Add a texture node and connect it appropriately.`;
+
+                await ctx.runGeminiPipeline(editorPrompt, inv.attachment);
+            }
         } else {
             console.log('[LoadAsset] Action: Save only.');
-            handleLog(`Asset saved as ${defaultSnapshotName} (intent: save only).`);
+            handleLog(`Asset saved (intent: save only).`);
         }
     } catch (e: any) {
         console.error(e);

@@ -23,7 +23,7 @@ const discovered = (): NodeModule[] => {
 };
 
 const registry: Record<string, NodeModule> = {};
-const legacyMap: Record<string, string> = {};
+export const legacyMap: Record<string, string> = {};
 
 discovered().forEach(m => {
   registry[m.type] = m;

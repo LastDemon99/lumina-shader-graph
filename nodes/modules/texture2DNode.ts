@@ -58,5 +58,6 @@ export const texture2DNode: NodeModule = {
     headerColor: 'bg-sky-900',
     isTextureSampler: true,
     requiresLod: true,
+    legacyAliases: ['textureAsset', 'texture2DAsset'],
   },
 };

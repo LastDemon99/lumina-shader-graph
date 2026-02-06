@@ -11,8 +11,15 @@ export type CommandContext = {
     ) => Promise<{ assetId: string } | null>;
     inferLoadAssetIntent: (
       userPrompt: string,
+      currentAssets?: SessionAsset[],
+      attachment?: string,
       onLog?: (msg: string) => void
-    ) => Promise<{ apply: boolean } | null>;
+    ) => Promise<{
+      action: 'save' | 'apply' | 'edit';
+      method: 'graph' | 'ai';
+      confidence: number;
+      reasoning?: string;
+    } | null>;
     inferTextureRequest: (userPrompt: string, onLog?: (msg: string) => void) => Promise<{
       imagePrompt: string;
       target: { nodeId: string; socketId: string };
@@ -31,7 +38,7 @@ export type CommandContext = {
       attachedNodes?: Array<{ id: string; label: string; type: string }>,
       onLog?: (msg: string) => void
     ) => Promise<string | null>;
-    inferGlobalIntent: (prompt: string, onLog?: (msg: string) => void) => Promise<{ command: string; confidence: number } | null>;
+    inferGlobalIntent: (prompt: string, attachment?: string, onLog?: (msg: string) => void) => Promise<{ command: string; confidence: number } | null>;
   };
 
   nodes: ShaderNode[];
@@ -57,7 +64,7 @@ export type CommandContext = {
   }) => void;
 
   runGeminiTexturePipeline: (texturePrompt: string, referenceAttachment?: string) => Promise<void>;
-  runGeminiPipeline: (prompt: string, attachment?: string) => Promise<void>;
+  runGeminiPipeline: (prompt: string, attachment?: string, selectedAssetId?: string) => Promise<void>;
   onAssistantResponse?: (text: string) => void;
 };
 

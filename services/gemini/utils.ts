@@ -1,5 +1,5 @@
-import { ShaderNode, Connection } from "../../types";
-import { ALL_NODE_TYPES, getNodeModule } from "../../nodes";
+import { ShaderNode, Connection, SessionAsset } from "../../types";
+import { ALL_NODE_TYPES, getNodeModule, legacyMap } from "../../nodes";
 import { getEffectiveSockets, getFallbackSocketId } from "../../nodes/runtime";
 
 export const inferMimeTypeFromDataUrl = (dataUrl: string) => {
@@ -39,6 +39,14 @@ export function getCacheStorage(): Storage | null {
     if (typeof localStorage !== 'undefined') return localStorage;
   } catch { /* ignore */ }
   return null;
+}
+
+export function getNextId(existingIds: string[], prefix: string = ''): string {
+  let i = 0;
+  while (existingIds.includes(`${prefix}${i}`)) {
+    i++;
+  }
+  return `${prefix}${i}`;
 }
 
 export function cleanBase64(dataUrlOrBase64: string): string {
@@ -179,7 +187,7 @@ export function normalizeGraph(raw: any): { nodes: any[]; connections: any[] } |
     .map((c: any, idx: number) => {
       if (c.from && c.to) {
         return {
-          id: c.id || `conn-${idx}-${Math.random().toString(36).slice(2)}`,
+          id: c.id || `c${idx}`,
           sourceNodeId: c.from.node,
           sourceSocketId: c.from.port,
           targetNodeId: c.to.node,
@@ -187,7 +195,7 @@ export function normalizeGraph(raw: any): { nodes: any[]; connections: any[] } |
         };
       }
       return {
-        id: c.id || `conn-${idx}-${Math.random().toString(36).slice(2)}`,
+        id: c.id || `c${idx}`,
         sourceNodeId: c.sourceNodeId,
         sourceSocketId: c.sourceSocketId,
         targetNodeId: c.targetNodeId,
@@ -220,19 +228,29 @@ export function inferRequiredMasterInputs(prompt: string): string[] {
 
 export function toMinimalGraphSnapshot(currentNodes: ShaderNode[], currentConnections: Connection[]): { nodes: any[]; connections: any[] } {
   return {
-    nodes: (Array.isArray(currentNodes) ? currentNodes : []).map(n => ({
-      id: n.id,
-      type: n.type,
-      x: typeof n.x === 'number' ? n.x : 0,
-      y: typeof n.y === 'number' ? n.y : 0,
-      ...(n.type === 'customFunction' || (n.data && ((n.data as any).customInputs?.length || (n.data as any).customOutputs?.length))
-        ? {
-          inputs: Array.isArray((n as any).inputs) ? (n as any).inputs : undefined,
-          outputs: Array.isArray((n as any).outputs) ? (n as any).outputs : undefined,
+    nodes: (Array.isArray(currentNodes) ? currentNodes : [])
+      .filter(n => n.type !== 'vertex' && n.type !== 'output')
+      .map(n => {
+        const cleanData = n.data ? { ...n.data } : {};
+        // Strip large binary data to save thousands of tokens
+        if ((cleanData as any).textureAsset && String((cleanData as any).textureAsset).length > 100) {
+          (cleanData as any).textureAsset = "(binary_data)";
         }
-        : {}),
-      ...(n.data ? { data: n.data } : {}),
-    })),
+
+        return {
+          id: n.id,
+          type: n.type,
+          x: Math.round(n.x),
+          y: Math.round(n.y),
+          ...(n.type === 'customFunction' || (n.data && ((n.data as any).customInputs?.length || (n.data as any).customOutputs?.length))
+            ? {
+              inputs: (n as any).inputs?.map((i: any) => ({ id: i.id, type: i.type })),
+              outputs: (n as any).outputs?.map((o: any) => ({ id: o.id, type: o.type })),
+            }
+            : {}),
+          ...(Object.keys(cleanData).length > 0 ? { data: cleanData } : {}),
+        };
+      }),
     connections: (Array.isArray(currentConnections) ? currentConnections : []).map(c => ({
       id: (c as any).id,
       sourceNodeId: c.sourceNodeId,
@@ -391,7 +409,15 @@ export function applyGraphOps(
         if (Array.isArray((patch as any).outputs)) next.outputs = (patch as any).outputs;
         if (patch.data !== undefined && patch.data && typeof patch.data === 'object') {
           const prevData = (existing as any).data && typeof (existing as any).data === 'object' ? (existing as any).data : {};
-          next.data = { ...prevData, ...(patch.data as any) };
+          const nextData = { ...prevData };
+
+          Object.entries(patch.data).forEach(([k, v]) => {
+            // NEVER allow the placeholder string to overwrite real data
+            if (v === "(bin)" || v === "(binary_data)") return;
+            (nextData as any)[k] = v;
+          });
+
+          next.data = nextData;
         }
         nodes[idx] = next;
       }
@@ -465,7 +491,7 @@ export function sanitizeGraph(rawData: any): {
   const outputAlias = normalized.nodes.find(n => String(n.id) === 'master-node' && String(n.type) === 'output');
   if (outputAlias) remapNodeIdInGraph('master-node', 'output');
 
-  const allowedTypes = new Set<string>([...ALL_NODE_TYPES, 'output', 'vertex']);
+  const allowedTypes = new Set<string>([...ALL_NODE_TYPES, ...Object.keys(legacyMap), 'output', 'vertex']);
   const sanitizedNodes = normalized.nodes
     .filter(n => {
       const ok = allowedTypes.has(n.type);
@@ -497,7 +523,7 @@ export function sanitizeGraph(rawData: any): {
 
       return {
         id: String(n.id),
-        type: String(n.type),
+        type: mod?.type ?? String(n.type),
         label: String((n as any).label || def?.label || n.id),
         x: typeof n.x === 'number' ? n.x : 0,
         y: typeof n.y === 'number' ? n.y : 0,
@@ -697,36 +723,89 @@ export function sanitizeGraph(rawData: any): {
   };
 }
 
-export function buildDynamicGraphContext(currentNodes: ShaderNode[], currentConnections: Connection[], prompt?: string): string {
-  // Keep the current graph snapshot compact to avoid blowing up context.
-  const snapshot = {
-    nodes: currentNodes.map(n => ({
-      id: n.id,
-      type: n.type,
-      x: Math.round(n.x),
-      y: Math.round(n.y),
-      ...(n.type === 'customFunction' || (n.data && ((n.data as any).customInputs?.length || (n.data as any).customOutputs?.length))
-        ? {
-          inputs: (n as any).inputs,
-          outputs: (n as any).outputs,
+export function buildDynamicGraphContext(
+  currentNodes: ShaderNode[],
+  currentConnections: Connection[],
+  prompt?: string,
+  sessionAssets?: SessionAsset[]
+): string {
+  const filteredNodes = currentNodes.filter(n => n.type !== 'vertex' && n.type !== 'output');
+
+  // 1. nodes.csv: id,type,x,y
+  const nodesCsv = [
+    'id,type,x,y',
+    ...filteredNodes.map(n => `${n.id},${n.type},${Math.round(n.x)},${Math.round(n.y)}`)
+  ].join('\n');
+
+  // 2. sockets.csv: nodeId,kind,id,type (only for dynamic nodes like customFunction)
+  const socketsRows: string[] = ['nodeId,kind,id,type'];
+  filteredNodes.forEach(n => {
+    const isDynamic = n.type === 'customFunction' || (n.data && ((n.data as any).customInputs?.length || (n.data as any).customOutputs?.length));
+    if (isDynamic) {
+      (n as any).inputs?.forEach((i: any) => socketsRows.push(`${n.id},in,${i.id},${i.type}`));
+      (n as any).outputs?.forEach((o: any) => socketsRows.push(`${n.id},out,${o.id},${o.type}`));
+    }
+  });
+
+  // 3. data.csv: nodeId,key,value (flattened)
+  const dataRows: string[] = ['nodeId,key,value'];
+  filteredNodes.forEach(n => {
+    if (n.data && typeof n.data === 'object') {
+      Object.entries(n.data).forEach(([key, val]) => {
+        // Skip redundant or massive data
+        if (key === 'customInputs' || key === 'customOutputs' || key === 'inputs' || key === 'outputs') return;
+
+        let safeVal = val;
+        if (key === 'textureAsset' && String(val).length > 64) {
+          // Try to find a matching asset in the library
+          const matchedAsset = sessionAssets?.find(a => a.dataUrl === val);
+          if (matchedAsset) {
+            safeVal = `(asset:${matchedAsset.id})`;
+          } else {
+            safeVal = "(bin)";
+          }
         }
-        : {}),
-      data: n.data,
-    })),
-    connections: currentConnections.map(c => ({
-      sourceNodeId: c.sourceNodeId,
-      sourceSocketId: c.sourceSocketId,
-      targetNodeId: c.targetNodeId,
-      targetSocketId: c.targetSocketId,
-    })),
-  };
+
+        // Use JSON.stringify to handle quotes/newlines/commas in safeVal (like GLSL code)
+        dataRows.push(`${n.id},${key},${JSON.stringify(safeVal)}`);
+      });
+    }
+  });
+
+  // 4. assets.csv: id,name (available in library)
+  const assetsCsv = [
+    'id,name',
+    ...(sessionAssets || []).map(a => `${a.id},${a.name}`)
+  ].join('\n');
+
+  // 5. connections.csv: id,srcNode,srcSocket,dstNode,dstSocket
+  const connsCsv = [
+    'id,srcNode,srcSocket,dstNode,dstSocket',
+    ...currentConnections.map(c =>
+      `${(c as any).id || ''},${c.sourceNodeId},${c.sourceSocketId},${c.targetNodeId},${c.targetSocketId}`
+    )
+  ].join('\n');
+
   const requiredMasterInputs = inferRequiredMasterInputs(prompt || '');
 
   return [
-    'DYNAMIC_CONTEXT:',
-    `- REQUIRED_MASTER_INPUTS (derived from user prompt): ${requiredMasterInputs.map(s => `output.${s}`).join(', ')}`,
-    'CURRENT_GRAPH_SNAPSHOT (for modification tasks / ops base):',
-    JSON.stringify(snapshot),
+    'DYNAMIC_CONTEXT (Tabular CSV):',
+    `- REQUIRED_MASTER_INPUTS: ${requiredMasterInputs.map(s => `output.${s}`).join(', ')}`,
+    '',
+    'NODES.CSV (id,type,x,y):',
+    nodesCsv,
+    '',
+    'SESSION_ASSETS.CSV (id,name):',
+    (sessionAssets && sessionAssets.length > 0) ? assetsCsv : "(no assets in library)",
+    '',
+    'DYNAMIC_SOCKETS.CSV (nodeId,kind,id,type):',
+    socketsRows.length > 1 ? socketsRows.join('\n') : "(no dynamic sockets)",
+    '',
+    'NODE_DATA.CSV (nodeId,key,value):',
+    dataRows.length > 1 ? dataRows.join('\n') : "(no data)",
+    '',
+    'CONNECTIONS.CSV (id,srcNode,srcSocket,dstNode,dstSocket):',
+    connsCsv,
   ].join('\n');
 }
 

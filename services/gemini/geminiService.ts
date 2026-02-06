@@ -1,6 +1,6 @@
 
 import { GoogleGenAI, ThinkingLevel } from "@google/genai";
-import { ShaderNode, Connection } from "../../types";
+import { ShaderNode, Connection, SessionAsset } from "../../types";
 import { ALL_NODE_TYPES, getNodeModule } from "../../nodes";
 import { lintGraph } from "./linter";
 import architectInstructions from "./agent-instructions/shader-architect.md?raw";
@@ -11,7 +11,7 @@ import * as utils from "./utils";
 
 export class GeminiService {
   private modelId = 'gemini-3-flash-preview';
-  private imageModelId = 'gemini-2.5-flash-image'; // (2.5 temporal for test) 'gemini-3-pro-image-preview';
+  private imageModelId = 'gemini-2.5-flash-image';
 
   private persistentEditorChat: any | null = null;
   private persistentEditorChatConfigKey: string | null = null;
@@ -163,53 +163,11 @@ export class GeminiService {
   }
 
   async appendManualGraphOpsToPersistentHistory(
-    ops: any[],
-    onLog?: (msg: string) => void
+    _ops: any[],
+    _onLog?: (msg: string) => void
   ): Promise<void> {
-    if (!Array.isArray(ops) || ops.length === 0) return;
-
-    const ai = this.createClient();
-    if (!ai) return;
-
-    // Keep local baseline in sync.
-    if (this.persistentBaselineGraph) {
-      try {
-        this.persistentBaselineGraph = utils.applyGraphOps(this.persistentBaselineGraph, ops, onLog);
-      } catch {
-        // ignore
-      }
-    }
-
-    const softwareContext = this.buildStableSoftwareContext('editor');
-    const systemInstruction = this.buildSystemInstruction('editor', softwareContext);
-    const chat = await this.getOrCreatePersistentEditorChat(ai, systemInstruction, onLog);
-
-    const getHistoryFn = (chat as any)?.getHistory;
-    if (typeof getHistoryFn !== 'function') {
-      onLog?.('Chat: getHistory() not available; skipping manual ops history injection.');
-      return;
-    }
-
-    try {
-      const history = await getHistoryFn.call(chat);
-      const nextHistory = Array.isArray(history) ? [...history] : [];
-      nextHistory.push({
-        role: 'system',
-        parts: [{ text: `MANUAL_GRAPH_OPS (apply on top of baseline):\n${JSON.stringify(ops)}` }],
-      });
-
-      // Recreate the chat with the updated history.
-      this.persistentEditorChat = await this.createGraphChat(ai, 'editor', systemInstruction, onLog, nextHistory);
-      this.persistentEditorChatConfigKey = `${this.modelId}:editor:cache:${utils.fnv1aHex(systemInstruction)}`;
-      onLog?.(`Chat: injected ${ops.length} manual op(s) into persistent history.`);
-
-      // Sync with Consultant
-      this.notifyConsultantOfGraphChange('User (Manual Edit)', `${ops.length} nodes/connections were modified manually in the UI.`).catch(err => {
-        console.error('[Sync] Consultant sync failed:', err);
-      });
-    } catch (e: any) {
-      onLog?.(`Chat: failed to inject manual ops into history (${e?.message || String(e)}).`);
-    }
+    // Disabled manual sync heartbeats to reduce API calls.
+    // Sync will happen lazily on next user prompt.
   }
 
   private buildSystemInstruction(agent: 'architect' | 'editor' | 'consultant', softwareContext: string): string {
@@ -246,19 +204,13 @@ export class GeminiService {
     if (!ai) return;
 
     const softwareContext = `AVAILABLE_NODES:\n${this.definitions}\n\nSCOPE: Lumina Shader Graph (WebGL 2.0).`;
-
-    // OPTIMIZATION: If the consultant session is not active, we don't need to sync history.
-    if (!this.persistentConsultantChat) {
-      return;
-    }
-
     const systemInstruction = this.buildSystemInstruction('consultant', softwareContext);
     const chat = await this.getOrCreatePersistentConsultantChat(ai, systemInstruction, onLog);
 
     try {
-      // We inject a special system context message to the model
+      // In persistent chat, we inform the consultant via a message, not system instruction
       const message = {
-        role: 'system',
+        role: 'user',
         parts: [{ text: `GRAPH_UPDATE_NOTICE from ${agentName}: ${changeDescription}` }]
       };
 
@@ -300,13 +252,19 @@ export class GeminiService {
       dynamicGraphContext += `\n\nATTACHED_NODES_CONTEXT (The user explicitly selected these nodes for your attention):\n${JSON.stringify(attachedNodes)}`;
     }
 
-    // We provide available nodes as context
-    const softwareContext = `AVAILABLE_NODES:\n${this.definitions}\n\nSCOPE: Lumina Shader Graph (WebGL 2.0).${dynamicGraphContext}`;
+    // STABLE_SOFTWARE_CONTEXT: Only definitions and general scope.
+    // This allows the expensive node definitions part to stay cached.
+    const softwareContext = `AVAILABLE_NODES:\n${this.definitions}\n\nSCOPE: Lumina Shader Graph (WebGL 2.0).`;
     const systemInstruction = this.buildSystemInstruction('consultant', softwareContext);
     const chat = await this.getOrCreatePersistentConsultantChat(ai, systemInstruction, onLog);
 
     try {
-      const responseText = await this.sendChatMessageText(chat, { text: prompt }, onLog, {
+      // DYNAMIC_GRAPH_CONTEXT: Passed as a user message or as a prefix to the query.
+      const contextualPrompt = dynamicGraphContext
+        ? `${dynamicGraphContext}\n\nUSER_QUERY: ${prompt}`
+        : prompt;
+
+      const responseText = await this.sendChatMessageText(chat, { text: contextualPrompt }, onLog, {
         includeThoughts: true,
         thinkingConfig: this.thinkingConfig,
       });
@@ -452,8 +410,10 @@ export class GeminiService {
 
     if (onLog && candidate.content && candidate.content.parts) {
       candidate.content.parts.forEach((part: any) => {
-        if (part.thought) {
-          onLog(`THOUGHT: ${part.text || "..."}`);
+        // Handle both (thought: string) and (thought: bool, text: string)
+        const thinkingText = typeof part.thought === 'string' ? part.thought : (part.thought ? part.text : null);
+        if (thinkingText) {
+          onLog(`THOUGHT: ${thinkingText}`);
         }
       });
     }
@@ -576,60 +536,91 @@ export class GeminiService {
 
   async inferLoadAssetIntent(
     userPrompt: string,
+    currentAssets: SessionAsset[] = [],
+    attachment?: string,
     onLog?: (msg: string) => void
-  ): Promise<{ apply: boolean } | null> {
+  ): Promise<{
+    action: 'save' | 'apply' | 'edit';
+    method: 'graph' | 'ai';
+    confidence: number;
+    reasoning?: string;
+  } | null> {
     const ai = this.createClient();
-    if (!ai) {
-      onLog?.('Missing Gemini API key (VITE_GEMINI_API_KEY).');
-      return null;
-    }
+    if (!ai) return null;
+
+    const assetsCsv = currentAssets.length > 0
+      ? currentAssets.map(a => `${a.id},${a.name}`).join('\n')
+      : "(no assets in library)";
 
     const prompt = String(userPrompt || '').trim();
-    if (!prompt) return { apply: false };
+    if (!prompt) return { action: 'save', method: 'graph', confidence: 1.0 };
 
     const instruction = [
-      'Task: Determine if the user wants to ONLY SAVE an image asset or also USE/APPLY it to the current shader graph.',
-      'Return ONLY valid JSON: { "apply": boolean }',
-      'Rules:',
-      '- apply=true if the user mentions usage (e.g., "for base color", "apply this", "as normal", "en el brillo").',
-      '- apply=false if they only say "save", "add to library", "cargar", or just provide a name.',
+      'You are a routing agent for image asset loading.',
+      'Task: Determine what the user wants to do with the NEW image attachment provided now.',
+      '',
+      'LIBRARY CONTEXT (Existing Assets):',
+      'id,name',
+      assetsCsv,
+      '',
+      'Actions:',
+      '- save: Just store in the library, no usage in the current graph.',
+      '- apply: Use the image in the graph AS IS (standard texture mapping).',
+      '- edit: Modify the image content or properties.',
+      '',
+      'Methods (Only for action="apply" or "edit"):',
+      '- graph: Use shader nodes (procedural/math). Best for: grayscale, brightness, tiling, simple masks, color tinting, blending.',
+      '- ai: Use generative AI models. Best for: changing style (e.g. leather to metal), adding objects, semantic changes, generating/editing new variants.',
+      '',
+      'Return ONLY valid JSON: { "action": "...", "method": "...", "confidence": 0.0-1.0, "reasoning": "short explanation" }',
       '',
       'User request:',
       prompt,
     ].join('\n');
 
-    onLog?.('Inferring load intent with gemini-2.0-flash-lite...');
+    const mediaParts: any[] = [];
+    if (attachment) {
+      let mimeType = "image/png";
+      const match = attachment.match(/^data:([^;]+);base64,/);
+      if (match) mimeType = match[1];
+      mediaParts.push({
+        inlineData: {
+          mimeType: mimeType,
+          data: utils.cleanBase64(attachment)
+        }
+      });
+    }
+
+    onLog?.('Inferring load strategy with Gemini 3...');
 
     try {
       const result = await ai.models.generateContent({
-        model: 'gemini-2.0-flash-lite',
-        contents: [{ role: 'user', parts: [{ text: instruction }] }],
-        config: { mediaResolution: 'MEDIA_RESOLUTION_HIGH' } as any,
+        model: this.modelId,
+        contents: [{ role: 'user', parts: [...mediaParts, { text: instruction }] }],
+        config: { responseMimeType: 'application/json' } as any,
       } as any);
 
       const candidate = (result as any)?.candidates?.[0] || (result as any)?.response?.candidates?.[0];
       const parts: any[] = candidate?.content?.parts || [];
-      const text = parts
-        .filter((p: any) => p && p.text)
-        .map((p: any) => String(p.text))
-        .join('')
-        .trim();
+      const text = parts.filter((p: any) => p && p.text).map((p: any) => String(p.text)).join('').trim();
 
-      console.log('[GeminiService] Raw Intent Response:', text);
-
-      if (!text) return { apply: false };
       const json = utils.safeJsonParse(text);
-      console.log('[GeminiService] Parsed Intent JSON:', json);
-      return { apply: !!json?.apply };
+      console.log('[GeminiService] Parsed Load Intent:', json);
+      return {
+        action: json?.action || 'save',
+        method: json?.method || 'graph',
+        confidence: json?.confidence || 0.5,
+        reasoning: json?.reasoning
+      };
     } catch (e: any) {
-      console.error('[GeminiService] Intent Inference Error:', e);
-      onLog?.(`Load intent inference failed, defaulting to save. (${e?.message || String(e)})`);
-      return { apply: false };
+      console.error('[GeminiService] Load Intent Error:', e);
+      return { action: 'save', method: 'graph', confidence: 0.0 };
     }
   }
 
   async inferGlobalIntent(
     userPrompt: string,
+    attachment?: string,
     onLog?: (msg: string) => void
   ): Promise<{ command: string; confidence: number } | null> {
     const ai = this.createClient();
@@ -653,12 +644,25 @@ export class GeminiService {
       userPrompt,
     ].join('\n');
 
-    onLog?.('Routing request with gemini-2.0-flash-lite...');
+    const mediaParts: any[] = [];
+    if (attachment) {
+      let mimeType = "image/png";
+      const match = attachment.match(/^data:([^;]+);base64,/);
+      if (match) mimeType = match[1];
+      mediaParts.push({
+        inlineData: {
+          mimeType: mimeType,
+          data: utils.cleanBase64(attachment)
+        }
+      });
+    }
+
+    onLog?.('Routing request with Gemini 3...');
 
     try {
       const result = await ai.models.generateContent({
-        model: 'gemini-2.0-flash-lite',
-        contents: [{ role: 'user', parts: [{ text: instruction }] }],
+        model: this.modelId,
+        contents: [{ role: 'user', parts: [...mediaParts, { text: instruction }] }],
         config: { responseMimeType: 'application/json' } as any,
       } as any);
 
@@ -991,6 +995,16 @@ export class GeminiService {
       '- Some inputs may enforce maxIncoming; extra connections are trimmed.',
       '- If output has an incoming connection, unreachable nodes may be pruned.',
       '',
+      'ASSET HANDLING:',
+      '- Large binary data (images/textures) are represented as "(bin)" or "(asset:ID)" in the context to save tokens.',
+      '- "(asset:ID)" refers to a specific image in the SESSION_ASSETS library. You can reference these by ID.',
+      '- DO NOT emit "(bin)" or "(asset:ID)" in your output for new nodes. If you need to keep existing data, simply omit that field from your patch.',
+      '- When the user provides a new image (e.g. via /loadimage), it is sent as a native IMAGE part.',
+      '- To use the NEWLY provided image, create a "texture2D" node (for simple color) or "sampleTexture2D" (for UV/channel control). The system will auto-inject the base64.',
+      '- TEXTURE RULE: Do NOT chain a "texture2D" node into a "sampleTexture2D" via the texture input. This is redundant. "sampleTexture2D" loads the asset directly.',
+      '- "texture2D" node: Has [rgba, r, g, b, a] outputs. Best for simple use cases.',
+      '- "sampleTexture2D" node: Has [rgba, r, g, b, a] outputs AND [uv, samplerState] inputs. Best when UV manipulation is needed.',
+      '',
       'AVAILABLE_NODES (type: Inputs[...] -> Outputs[...]):',
       this.definitions,
     ].join('\n');
@@ -1073,6 +1087,7 @@ export class GeminiService {
     prompt: string,
     currentNodes: ShaderNode[],
     currentConnections: Connection[],
+    sessionAssets?: SessionAsset[],
     imageBase64?: string,
     onLog?: (msg: string) => void,
     onUpdate?: (nodes: any[], conns: any[]) => void,
@@ -1136,18 +1151,23 @@ export class GeminiService {
 
       const parts: any[] = [...mediaParts, { text: `User Prompt: ${effectivePrompt}` }];
 
+      const currentMinimal = utils.toMinimalGraphSnapshot(currentNodes, currentConnections);
+      const graphStateDirty = !this.persistentBaselineGraph || JSON.stringify(this.persistentBaselineGraph) !== JSON.stringify(currentMinimal);
+
       // If persistent chat is enabled for editor, prefer relying on chat history baseline/ops instead
       // of re-sending full CURRENT_GRAPH_SNAPSHOT every time.
-      const shouldOmitDynamicGraphContext = persistChat && agent === 'editor' && !!this.persistentBaselineGraph;
-
-      // Keep dynamic snapshot outside of the cached prefix when applicable.
-      const dynamicContext = !shouldOmitDynamicGraphContext
-        ? utils.buildDynamicGraphContext(currentNodes, currentConnections, effectivePrompt)
-        : '';
+      // EXCEPTION: If the graph was modified manually since last sync, we MUST send the context.
+      const shouldOmitDynamicGraphContext = persistChat && agent === 'editor' && !!this.persistentBaselineGraph && !graphStateDirty;
+      const dynamicContext = utils.buildDynamicGraphContext(currentNodes, currentConnections, effectivePrompt, sessionAssets);
 
       const effectiveParts: any[] = shouldOmitDynamicGraphContext
         ? [...mediaParts, { text: `USER_PROMPT:\n${effectivePrompt}` }]
-        : [...mediaParts, { text: `${dynamicContext}\n\nUSER_PROMPT:\n${effectivePrompt}` }];
+        : [...mediaParts, { text: `SYSTEM_ALERT: The user has manually modified the graph in the UI. Here is the authoritative CURRENT_GRAPH_SNAPSHOT following those edits:\n\n${dynamicContext}\n\nUSER_PROMPT:\n${effectivePrompt}` }];
+
+      // Update baseline if we are sending context
+      if (!shouldOmitDynamicGraphContext) {
+        this.persistentBaselineGraph = currentMinimal;
+      }
 
       const cachedContent = (!chatEnabled)
         ? await this.getOrCreateCachedPrefix(
@@ -1329,10 +1349,23 @@ export class GeminiService {
         }
       }
 
-      // Post-Process: Inject attachment into texture nodes if missing
+      // Post-Process: Inject attachment into texture nodes.
       if (imageBase64 && draft.nodes) {
-        draft.nodes.forEach((n: any) => {
-          if ((n.type === 'textureAsset' || n.type === 'texture2DAsset') && !n.data?.textureAsset) {
+        const textureNodes = draft.nodes.filter((n: any) =>
+          n.type === 'textureAsset' ||
+          n.type === 'texture2DAsset' ||
+          n.type === 'texture2D' ||
+          n.type === 'sampleTexture2D' ||
+          n.type === 'texture'
+        );
+
+        // If there's only one texture node, or the user mentioned "replace/remplazar",
+        // we're aggressive about updating it.
+        const shouldForceReplace = /remplaza|replace|actualiza|update/i.test(prompt) || textureNodes.length === 1;
+
+        textureNodes.forEach((n: any) => {
+          const hasImage = !!n.data?.textureAsset && n.data.textureAsset !== 'image:base64';
+          if (!hasImage || shouldForceReplace) {
             if (!n.data) n.data = {};
             n.data.textureAsset = imageBase64;
             if (onLog) onLog(`Auto-injected attachment into ${n.id} (${n.type})`);
