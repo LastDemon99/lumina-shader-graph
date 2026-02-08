@@ -2,45 +2,6 @@ import type { ShaderNode, Connection } from '../../../types';
 import type { ReactDispatch, SessionAsset, GenerationPhase, ChatContextItem, ApplyTextureOperation, ApplyTextureChannel } from '../types';
 
 export type CommandContext = {
-  geminiService: {
-    inferEditAssetTarget: (
-      userPrompt: string,
-      assets: Array<{ id: string; name: string }>,
-      chatContext?: ChatContextItem[],
-      onLog?: (msg: string) => void
-    ) => Promise<{ assetId: string } | null>;
-    inferLoadAssetIntent: (
-      userPrompt: string,
-      currentAssets?: SessionAsset[],
-      attachment?: string,
-      onLog?: (msg: string) => void
-    ) => Promise<{
-      action: 'save' | 'apply' | 'edit';
-      method: 'graph' | 'ai';
-      confidence: number;
-      reasoning?: string;
-    } | null>;
-    inferTextureRequest: (userPrompt: string, onLog?: (msg: string) => void) => Promise<{
-      imagePrompt: string;
-      target: { nodeId: string; socketId: string };
-      operation: ApplyTextureOperation;
-      channel: ApplyTextureChannel;
-    } | null>;
-    editTextureDataUrl: (
-      editPrompt: string,
-      sourceImageDataUrl: string,
-      onLog?: (msg: string) => void
-    ) => Promise<{ dataUrl: string; mimeType: string; text?: string } | null>;
-    askQuestion: (
-      prompt: string,
-      currentNodes?: ShaderNode[],
-      currentConnections?: Connection[],
-      attachedNodes?: Array<{ id: string; label: string; type: string }>,
-      onLog?: (msg: string) => void
-    ) => Promise<string | null>;
-    inferGlobalIntent: (prompt: string, attachment?: string, onLog?: (msg: string) => void) => Promise<{ command: string; confidence: number } | null>;
-  };
-
   nodes: ShaderNode[];
   connections: Connection[];
   sessionAssets: SessionAsset[];
@@ -63,7 +24,6 @@ export type CommandContext = {
     log?: (msg: string) => void;
   }) => void;
 
-  runGeminiTexturePipeline: (texturePrompt: string, referenceAttachment?: string) => Promise<void>;
   runGeminiPipeline: (prompt: string, attachment?: string, selectedAssetId?: string) => Promise<void>;
   onAssistantResponse?: (text: string) => void;
 };

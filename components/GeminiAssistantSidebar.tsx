@@ -72,6 +72,7 @@ interface GeminiAssistantSidebarProps {
     assets: SessionAsset[];
     onAddAsset: (dataUrl: string, suggestedName?: string) => void;
     onUseAssetAsTextureNode: (assetId: string) => void;
+    onDeleteAsset: (assetId: string) => void | Promise<void>;
 
     attachedNodes?: Array<{ id: string; label: string; type: string }>;
     onClearAttachedNodes?: () => void;
@@ -87,6 +88,7 @@ export const GeminiAssistantSidebar: React.FC<GeminiAssistantSidebarProps> = ({
     assets,
     onAddAsset,
     onUseAssetAsTextureNode,
+    onDeleteAsset,
     attachedNodes,
     onClearAttachedNodes,
 }) => {
@@ -141,7 +143,14 @@ export const GeminiAssistantSidebar: React.FC<GeminiAssistantSidebarProps> = ({
 
         // End of run: persist transcript into history
         if (prev !== 'idle' && generationPhase === 'idle') {
-            const transcript = runTranscriptRef.current.length > 0 ? runTranscriptRef.current : logs;
+            const captured = runTranscriptRef.current;
+            const live = Array.isArray(logs) ? logs : [];
+            // React batches state updates; sometimes the last log updates land in the same render
+            // that flips generationPhase back to 'idle'. In that case, `captured` may be missing
+            // tail logs. Prefer `live` if it is longer.
+            const transcript = (captured && captured.length > 0)
+                ? (live.length >= captured.length ? live : captured)
+                : live;
             const thoughts = transcript.filter(l => String(l).startsWith('THOUGHT:'));
             const normalLogs = transcript.filter(l => !String(l).startsWith('THOUGHT:'));
 
@@ -243,6 +252,8 @@ export const GeminiAssistantSidebar: React.FC<GeminiAssistantSidebarProps> = ({
         let finalAttachment = attachment;
 
         // Auto-detect YouTube URLs in prompt if no attachment is present
+        // (Disabled temporarily as requested)
+        /*
         if (!finalAttachment && prompt.trim()) {
             const ytRegex = /(https?:\/\/(?:www\.)?youtube\.com\/watch\?v=[a-zA-Z0-9_-]+|https?:\/\/youtu\.be\/[a-zA-Z0-9_-]+)/;
             const match = prompt.match(ytRegex);
@@ -251,6 +262,7 @@ export const GeminiAssistantSidebar: React.FC<GeminiAssistantSidebarProps> = ({
                 // Optional: remove URL from prompt? No, better keep it as context.
             }
         }
+        */
 
         if (finalPrompt.trim().toLowerCase() === '/clear') {
             setMessages([
@@ -361,6 +373,12 @@ export const GeminiAssistantSidebar: React.FC<GeminiAssistantSidebarProps> = ({
                 el.setSelectionRange(len, len);
             }
         }, 0);
+    };
+
+    const handleDeleteAsset = async (asset: SessionAsset) => {
+        if (selectedAssetId === asset.id) setSelectedAssetId(null);
+        if (attachment === asset.dataUrl) setAttachment(null);
+        await onDeleteAsset(asset.id);
     };
 
     const handleDragOver = (e: React.DragEvent) => {
@@ -503,7 +521,7 @@ export const GeminiAssistantSidebar: React.FC<GeminiAssistantSidebarProps> = ({
                             {assets.slice().sort((a, b) => b.createdAt - a.createdAt).map(a => (
                                 <div key={a.id} className="border border-gray-700 rounded-lg overflow-hidden bg-[#111]">
                                     <div className="aspect-square bg-black">
-                                        {a.dataUrl.startsWith('data:image/') ? (
+                                        {String(a.mimeType || '').toLowerCase().startsWith('image/') ? (
                                             <img src={a.dataUrl} alt={a.name} className="w-full h-full object-cover" />
                                         ) : (
                                             <div className="w-full h-full flex items-center justify-center text-gray-500 text-xs">Unsupported</div>
@@ -526,6 +544,14 @@ export const GeminiAssistantSidebar: React.FC<GeminiAssistantSidebarProps> = ({
                                                 title="Attach this asset and prep /editimage to edit it"
                                             >
                                                 Edit
+                                            </button>
+
+                                            <button
+                                                className="col-span-2 w-full text-xs px-2 py-1 rounded bg-red-700 hover:bg-red-600 text-white"
+                                                onClick={() => handleDeleteAsset(a)}
+                                                title="Delete this asset"
+                                            >
+                                                Delete
                                             </button>
                                         </div>
                                     </div>
@@ -563,6 +589,11 @@ export const GeminiAssistantSidebar: React.FC<GeminiAssistantSidebarProps> = ({
                                                 <video src={msg.attachment} controls className="max-w-full h-auto max-h-32" />
                                             ) : msg.attachment.startsWith('data:audio/') ? (
                                                 <audio src={msg.attachment} controls className="w-full h-8" />
+                                            ) : msg.attachment.includes('/api/v1/assets/') ? (
+                                                <div className="flex items-center gap-2 p-2 overflow-hidden bg-blue-900/20">
+                                                    <ImageIcon className="w-4 h-4 text-blue-400 shrink-0" />
+                                                    <span className="truncate text-[10px] text-gray-300 font-mono">{msg.attachment}</span>
+                                                </div>
                                             ) : msg.attachment.startsWith('http') ? (
                                                 <div className="flex items-center gap-2 p-2 overflow-hidden bg-red-900/20">
                                                     <Play className="w-4 h-4 text-red-500 shrink-0" />
@@ -751,6 +782,8 @@ export const GeminiAssistantSidebar: React.FC<GeminiAssistantSidebarProps> = ({
                                         <Play className="w-4 h-4 text-pink-400" />
                                     ) : attachment.startsWith('data:audio/') ? (
                                         <Mic className="w-4 h-4 text-emerald-400" />
+                                    ) : attachment.includes('/api/v1/assets/') ? (
+                                        <ImageIcon className="w-4 h-4 text-blue-400" />
                                     ) : attachment.startsWith('http') ? (
                                         <Play className="w-4 h-4 text-red-500" />
                                     ) : (
@@ -758,7 +791,8 @@ export const GeminiAssistantSidebar: React.FC<GeminiAssistantSidebarProps> = ({
                                     )}
                                     <span className="text-xs text-gray-200 truncate flex-1">
                                         {attachment.startsWith('data:audio/') ? 'Voice recording attached' :
-                                            attachment.startsWith('http') ? 'YouTube Link detected' : 'File attached'}
+                                            attachment.includes('/api/v1/assets/') ? 'Library asset attached' :
+                                                attachment.startsWith('http') ? 'External link attached' : 'File attached'}
                                     </span>
                                     <button
                                         onClick={() => { setAttachment(null); setSelectedAssetId(null); }}

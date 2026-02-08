@@ -10,6 +10,7 @@ export async function runGenerateImage(inv: CommandInvocation, ctx: CommandConte
   if (!rest) return true;
 
   const focusPrefix = inv.focusText ? `${inv.focusText}\n\n` : '';
-  await ctx.runGeminiTexturePipeline(`${focusPrefix}${rest}`, inv.attachment);
+  // Backend handles image generation + graph edits (multi-intent)
+  await ctx.runGeminiPipeline(`/generateimage ${focusPrefix}${rest}`.trim(), inv.attachment, inv.selectedAssetId);
   return true;
 }

@@ -12,26 +12,8 @@ export async function runAsk(inv: CommandInvocation, ctx: CommandContext): Promi
         return true;
     }
 
-    ctx.setGenerationPhase('drafting'); // Use drafting to indicate thinking
-    const handleLog = (msg: string) => ctx.setLinterLogs(prev => [...prev, msg]);
-
-    try {
-        const answer = await ctx.geminiService.askQuestion(
-            question,
-            ctx.nodes,
-            ctx.connections,
-            inv.attachedNodes,
-            handleLog
-        );
-        if (answer && ctx.onAssistantResponse) {
-            ctx.onAssistantResponse(answer);
-        }
-    } catch (e: any) {
-        console.error(e);
-        ctx.setLinterLogs(prev => [...prev, `Ask error: ${e?.message || String(e)}`]);
-    } finally {
-        ctx.setGenerationPhase('idle');
-    }
+    // Backend handles answering (and may decide whether to emit ops or not).
+    await ctx.runGeminiPipeline(`/ask ${question}`.trim(), inv.attachment, inv.selectedAssetId);
 
     return true;
 }

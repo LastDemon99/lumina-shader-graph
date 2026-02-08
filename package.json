@@ -9,7 +9,6 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "@google/genai": "^1.34.0",
     "@types/prismjs": "^1.26.5",
     "lucide-react": "^0.562.0",
     "prismjs": "^1.30.0",

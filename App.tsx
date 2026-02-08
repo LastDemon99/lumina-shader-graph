@@ -6,22 +6,22 @@ import { SceneView } from './components/SceneView';
 import { GlobalCanvas } from './components/GlobalCanvas'; // Import Global Canvas
 import { GeminiAssistantSidebar } from './components/GeminiAssistantSidebar';
 import { generateFragmentShader, generateVertexShader } from './services/render/glslGenerator';
-import { geminiService } from './services/gemini/geminiService';
-import { lintGraph } from './services/gemini/linter';
+import { geminiService, getAgentBaseUrl, type AgentChatMessage, type AgentGraphOperation, type AgentMessagePart } from './services/gemini/geminiService';
 import { ShaderNode, Connection, Viewport, NodeType, SocketType, SocketDef, SessionAsset, GenerationPhase } from './types';
 import { INITIAL_NODES, INITIAL_CONNECTIONS } from './initialGraph';
 import { NODE_LIST, getNodeModule } from './nodes';
 import { getEffectiveSockets } from './nodes/runtime';
-import { previewSystem } from './services/render/previewSystem';
 import { dispatchCommand } from './services/gemini/commands/dispatch';
 import { Wand2, Download, Upload, ZoomIn, ZoomOut, MousePointer2, Box, Square, Save, Layers, Network, CheckCircle2, Loader2, Sparkles, FileJson, AlertCircle, Plus, FilePlus, Circle, AppWindow, Code2 } from 'lucide-react';
 import { CodeEditor } from './components/CodeEditor';
+import { previewSystem } from './services/render/previewSystem';
 
 const App: React.FC = () => {
   const suppressManualHistoryRef = useRef(false);
   const prevSnapshotRef = useRef<{ nodes: ShaderNode[]; connections: Connection[] } | null>(null);
   const pendingOpsRef = useRef<any[]>([]);
   const manualOpsDebounceRef = useRef<number | null>(null);
+  const chatContextRef = useRef<Array<{ role: 'user' | 'assistant' | 'system'; content: string }> | null>(null);
 
   const parseBool = useCallback((value: any) => {
     if (value === true) return true;
@@ -57,14 +57,12 @@ const App: React.FC = () => {
   const handleNewGraph = () => {
     if (confirm('Are you sure you want to create a new graph? Unsaved changes will be lost.')) {
       suppressManualHistoryRef.current = true;
-      geminiService.resetPersistentGraphSession();
-      geminiService.setPersistentGraphBaseline(INITIAL_NODES, INITIAL_CONNECTIONS);
       setNodes(INITIAL_NODES);
       setConnections(INITIAL_CONNECTIONS);
       setViewport({ x: 0, y: 0, zoom: 1 });
       setSelectedNodeIds(new Set());
       setFileHandle(null);
-      setFileName(null);
+      setFileName('');
       setIsSaved(true);
       // allow one tick for state to settle
       setTimeout(() => {
@@ -205,6 +203,8 @@ const App: React.FC = () => {
     const clipped = json.length > 6000 ? `${json.slice(0, 6000)}…` : json;
     return (
       'FOCUS (expert attachments): The user attached a focused subgraph. Prefer making edits within this subgraph unless asked otherwise.\n' +
+      `FOCUS_NODE_IDS: ${seedIds.join(',')}\n` +
+      'FOCUS_SUBGRAPH_JSON:\n' +
       clipped
     );
   }, [attachedNodeIds, nodes, connections]);
@@ -217,6 +217,102 @@ const App: React.FC = () => {
 
   // Session Asset Library (in-memory)
   const [sessionAssets, setSessionAssets] = useState<SessionAsset[]>([]);
+
+  const deleteSessionAsset = useCallback(async (assetId: string) => {
+    const asset = sessionAssets.find(a => a.id === assetId);
+    if (!asset) return;
+
+    // If this asset is backed by the backend (URL), delete it there first.
+    if (asset.dataUrl.startsWith('http')) {
+      try {
+        const resp = await fetch(asset.dataUrl, { method: 'DELETE' });
+        if (!resp.ok) {
+          setLinterLogs(prev => [...prev, `Asset delete failed (${resp.status}): ${asset.name}`]);
+          return;
+        }
+      } catch {
+        setLinterLogs(prev => [...prev, `Asset delete failed (network): ${asset.name}`]);
+        return;
+      }
+    }
+
+    setSessionAssets(prev => prev.filter(a => a.id !== assetId));
+    setLinterLogs(prev => [...prev, `Asset deleted: ${asset.name}`]);
+  }, [sessionAssets]);
+
+  // Hydrate persisted assets from backend on load.
+  useEffect(() => {
+    const baseUrl = getAgentBaseUrl();
+    let cancelled = false;
+
+    let retryTimer: number | null = null;
+    const MAX_ATTEMPTS = 8;
+
+    const scheduleRetry = (attempt: number) => {
+      if (cancelled) return;
+      const delayMs = Math.min(10000, 500 * Math.pow(2, attempt));
+      retryTimer = window.setTimeout(() => {
+        hydrate(attempt + 1);
+      }, delayMs);
+    };
+
+    const hydrate = async (attempt: number) => {
+      if (cancelled) return;
+      try {
+        const res = await fetch(`${baseUrl}/api/v1/assets`, {
+          method: 'GET',
+          headers: { 'Content-Type': 'application/json' },
+        });
+
+        if (!res.ok) {
+          if (attempt === 0) {
+            setLinterLogs(prev => [...prev, `Asset hydration failed (${res.status}). Retrying…`]);
+          }
+          if (attempt < MAX_ATTEMPTS) scheduleRetry(attempt);
+          return;
+        }
+
+        const json = await res.json();
+        const assets = Array.isArray(json?.assets) ? json.assets : [];
+
+        const mapped: SessionAsset[] = assets
+          .map((a: any) => {
+            const id = String(a?.assetId || '').trim();
+            if (!id) return null;
+            const name = String(a?.name || id);
+            const mimeType = String(a?.mimeType || 'application/octet-stream');
+            const createdAt = Number(a?.createdAt);
+            return {
+              id,
+              name,
+              dataUrl: `${baseUrl}/api/v1/assets/${encodeURIComponent(id)}`,
+              mimeType,
+              createdAt: Number.isFinite(createdAt) ? createdAt : Date.now(),
+            } as SessionAsset;
+          })
+          .filter(Boolean) as SessionAsset[];
+
+        if (cancelled) return;
+        setSessionAssets(prev => {
+          const byId = new Map(prev.map(x => [x.id, x] as const));
+          for (const a of mapped) byId.set(a.id, a);
+          return Array.from(byId.values());
+        });
+      } catch {
+        if (attempt === 0) {
+          setLinterLogs(prev => [...prev, 'Asset hydration failed (network). Retrying…']);
+        }
+        if (attempt < MAX_ATTEMPTS) scheduleRetry(attempt);
+      }
+    };
+
+    hydrate(0);
+
+    return () => {
+      cancelled = true;
+      if (retryTimer != null) window.clearTimeout(retryTimer);
+    };
+  }, []);
 
   const addSessionAsset = useCallback((dataUrl: string, suggestedName?: string) => {
     const s = String(dataUrl || '');
@@ -435,17 +531,28 @@ const App: React.FC = () => {
     // Map stores { url, wrap, filter } instead of just url string
     const map: Record<string, { url: string, wrap: string, filter: string }> = {};
 
+    const assetById = new Map(sessionAssets.map(a => [a.id, a.dataUrl] as const));
+    const resolveAssetUrl = (value: any): string | undefined => {
+      if (typeof value !== 'string') return undefined;
+      const s = value.trim();
+      if (!s) return undefined;
+      if (s.startsWith('data:') || s.startsWith('http://') || s.startsWith('https://') || s.startsWith('blob:') || s.startsWith('/')) {
+        return s;
+      }
+      return assetById.get(s) || s;
+    };
+
     // 1. Handle Texture Nodes with Internal Assets (No input connection) or gathered from input
     // FIXED: Added 'calculateLevelOfDetailTexture', 'textureSize', and 'parallaxMapping' to ensure main scene gets data
     nodes.filter(n => getNodeModule(n.type)?.metadata?.isTextureSampler).forEach(n => {
       // Determine Asset URL
-      let assetUrl = n.data.textureAsset;
+      let assetUrl = resolveAssetUrl(n.data.textureAsset);
       const assetConn = connections.find(c => c.targetNodeId === n.id && c.targetSocketId === 'texture');
 
       if (assetConn) {
         const sourceNode = nodes.find(sn => sn.id === assetConn.sourceNodeId);
         if (sourceNode && sourceNode.data.textureAsset) {
-          assetUrl = sourceNode.data.textureAsset;
+          assetUrl = resolveAssetUrl(sourceNode.data.textureAsset);
         }
       }
 
@@ -471,7 +578,7 @@ const App: React.FC = () => {
     // 2. (Redundant) Orphaned Texture Assets are now handled by Step 1 via metadata.isTextureSampler
 
     return map;
-  }, [nodes, connections]);
+  }, [nodes, connections, sessionAssets]);
 
   // Refs
   const canvasRef = useRef<HTMLDivElement>(null);
@@ -591,6 +698,119 @@ const App: React.FC = () => {
 
   }, [clipboard, mousePos, viewport, nodes, connections]);
 
+  const sanitizeConnections = useCallback((
+    nodesSnapshot: ShaderNode[],
+    connectionsSnapshot: Connection[],
+  ): { connections: Connection[]; fixedCount: number; droppedCount: number } => {
+    const byId = new Map(nodesSnapshot.map(n => [n.id, n] as const));
+
+    const getSocketIds = (node: ShaderNode, direction: 'input' | 'output', conns: Connection[]): string[] => {
+      const mod = getNodeModule(node.type);
+      const sockets = direction === 'input' ? node.inputs : node.outputs;
+      try {
+        return getEffectiveSockets(node, sockets, direction, conns, mod?.socketRules).map(s => s.id);
+      } catch {
+        return (sockets || []).map(s => s.id);
+      }
+    };
+
+    const resolveSocketId = (
+      node: ShaderNode,
+      rawSocketId: string,
+      direction: 'input' | 'output',
+      conns: Connection[],
+    ): string | null => {
+      const socketId = String(rawSocketId || '').trim();
+      if (!socketId) return null;
+      const ids = getSocketIds(node, direction, conns);
+      if (ids.includes(socketId)) return socketId;
+      const lower = socketId.toLowerCase();
+      const match = ids.find(id => String(id).toLowerCase() === lower);
+      return match ?? null;
+    };
+
+    const getMaxConnections = (
+      node: ShaderNode,
+      socketId: string,
+      direction: 'input' | 'output',
+      conns: Connection[],
+    ): number => {
+      const mod = getNodeModule(node.type);
+      const sockets = direction === 'input' ? node.inputs : node.outputs;
+      try {
+        const effective = getEffectiveSockets(node, sockets, direction, conns, mod?.socketRules);
+        const s = effective.find(x => x.id === socketId);
+        if (typeof s?.maxConnections === 'number') return s.maxConnections;
+      } catch {
+        // ignore
+      }
+      return direction === 'input' ? 1 : Number.POSITIVE_INFINITY;
+    };
+
+    const kept: Connection[] = [];
+    const byKey = new Set<string>();
+    let fixedCount = 0;
+    let droppedCount = 0;
+
+    const keyOf = (c: Connection) => `${c.sourceNodeId}:${c.sourceSocketId}->${c.targetNodeId}:${c.targetSocketId}`;
+
+    for (const conn of connectionsSnapshot || []) {
+      if (!conn) continue;
+      const src = byId.get(conn.sourceNodeId);
+      const dst = byId.get(conn.targetNodeId);
+      if (!src || !dst) {
+        droppedCount++;
+        continue;
+      }
+
+      const resolvedSourceSocketId = resolveSocketId(src, conn.sourceSocketId, 'output', kept);
+      const resolvedTargetSocketId = resolveSocketId(dst, conn.targetSocketId, 'input', kept);
+      if (!resolvedSourceSocketId || !resolvedTargetSocketId) {
+        droppedCount++;
+        continue;
+      }
+
+      const normalized: Connection = {
+        ...conn,
+        sourceSocketId: resolvedSourceSocketId,
+        targetSocketId: resolvedTargetSocketId,
+      };
+      if (normalized.sourceSocketId !== conn.sourceSocketId || normalized.targetSocketId !== conn.targetSocketId) {
+        fixedCount++;
+      }
+
+      // Enforce per-socket maxConnections (especially inputs, which are typically 1).
+      const targetMax = getMaxConnections(dst, normalized.targetSocketId, 'input', kept);
+      if (Number.isFinite(targetMax)) {
+        const existingToTarget = kept.filter(c => c.targetNodeId === normalized.targetNodeId && c.targetSocketId === normalized.targetSocketId);
+        if (targetMax === 1 && existingToTarget.length > 0) {
+          // Replace older connection to this input socket.
+          for (let i = kept.length - 1; i >= 0; i--) {
+            const c = kept[i];
+            if (c.targetNodeId === normalized.targetNodeId && c.targetSocketId === normalized.targetSocketId) {
+              byKey.delete(keyOf(c));
+              kept.splice(i, 1);
+              break;
+            }
+          }
+        } else if (existingToTarget.length >= targetMax) {
+          droppedCount++;
+          continue;
+        }
+      }
+
+      const k = keyOf(normalized);
+      if (byKey.has(k)) {
+        droppedCount++;
+        continue;
+      }
+      byKey.add(k);
+      kept.push(normalized);
+    }
+
+    return { connections: kept, fixedCount, droppedCount };
+  }, []);
+
   // --- File Save/Load Logic ---
 
   const loadGraphFromString = (jsonString: string) => {
@@ -611,7 +831,6 @@ const App: React.FC = () => {
         });
 
         suppressManualHistoryRef.current = true;
-        geminiService.resetPersistentGraphSession();
 
         setViewport({ x: 0, y: 0, zoom: 1 });
         setSelectedNodeIds(new Set<string>());
@@ -627,10 +846,15 @@ const App: React.FC = () => {
 
         setTimeout(() => {
           setNodes(normalizedNodes);
-          setConnections(typedData.connections);
+          const sanitized = sanitizeConnections(normalizedNodes, typedData.connections);
+          setConnections(sanitized.connections);
+          if (sanitized.fixedCount || sanitized.droppedCount) {
+            setLinterLogs(prev => [
+              ...prev,
+              `Graph fixup: ${sanitized.fixedCount} socket id fixes, ${sanitized.droppedCount} invalid connections dropped.`,
+            ]);
+          }
           setIsSaved(true);
-
-          geminiService.setPersistentGraphBaseline(normalizedNodes, typedData.connections);
           suppressManualHistoryRef.current = false;
         }, 50);
       } else {
@@ -739,35 +963,12 @@ const App: React.FC = () => {
   };
 
   useEffect(() => {
-    // Keep a baseline for persistent chat (even if persistence is disabled, this is a no-op).
     if (!prevSnapshotRef.current) {
       prevSnapshotRef.current = { nodes, connections };
-      geminiService.setPersistentGraphBaseline(nodes, connections);
       return;
     }
 
-    const prev = prevSnapshotRef.current;
-    const next = { nodes, connections };
-    prevSnapshotRef.current = next;
-
-    if (suppressManualHistoryRef.current) return;
-
-    const ops = diffGraphToOps(prev, next);
-    if (ops.length === 0) return;
-
-    // Debounce + coalesce to avoid spamming history during drags.
-    pendingOpsRef.current.push(...ops);
-    if (manualOpsDebounceRef.current) window.clearTimeout(manualOpsDebounceRef.current);
-    manualOpsDebounceRef.current = window.setTimeout(() => {
-      const batch = pendingOpsRef.current.splice(0, pendingOpsRef.current.length);
-      if (batch.length > 0) {
-        geminiService.appendManualGraphOpsToPersistentHistory(batch, (msg: string) => {
-          setLinterLogs(prevLogs => [...prevLogs, msg]);
-        }).catch(() => {
-          // ignore
-        });
-      }
-    }, 400);
+    prevSnapshotRef.current = { nodes, connections };
   }, [nodes, connections]);
 
   const handleOpen = useCallback(async () => {
@@ -1451,229 +1652,571 @@ const App: React.FC = () => {
     return { x: node.x + (isInput ? -9 : 169), y: node.y + 50 };
   };
 
-  const runGeminiPipeline = async (prompt: string, attachment?: string, selectedAssetId?: string) => {
+  const runGeminiPipeline = async (
+    prompt: string,
+    attachment?: string,
+    selectedAssetId?: string,
+    previewRequestRound: number = 0,
+    uploadFollowupRound: number = 0
+  ) => {
     if (!prompt && !attachment) return;
 
-    let finalPrompt = prompt;
+    const parseInlineData = (dataUrl: string): { mime_type: string; data: string } | null => {
+      const match = String(dataUrl || '').match(/^data:([^;]+);base64,(.*)$/);
+      if (!match) return null;
+      return { mime_type: match[1], data: match[2] };
+    };
+
+    let finalPrompt = String(prompt || '');
     if (selectedAssetId) {
       const asset = sessionAssets.find(a => a.id === selectedAssetId);
-      if (asset) {
-        finalPrompt = `[CONTEXT: The attached image is asset ID "${asset.id}" (name: "${asset.name}")]\n${prompt}`;
-      }
+      const name = asset?.name ? `"${asset.name}"` : 'unknown';
+      finalPrompt = `[CONTEXT: The attached image is asset ID "${selectedAssetId}" (name: ${name})]\n${finalPrompt}`;
     }
 
     suppressManualHistoryRef.current = true;
     setGenerationPhase('drafting');
-    setLinterLogs(['Planning...']);
+    setLinterLogs(prev => {
+      const line = uploadFollowupRound > 0 ? 'Calling backend agent (follow-up)...' : 'Calling backend agent...';
+      return uploadFollowupRound > 0 ? [...prev, line] : [line];
+    });
+    setLastAssistantResponse(null);
+    setLastAiMeta(null);
 
-    const handleLog = (msg: string) => {
-      setLinterLogs(prev => [...prev, msg]);
+    const history = Array.isArray(chatContextRef.current) ? chatContextRef.current : [];
+    const messages: AgentChatMessage[] = history.map(m => ({ role: m.role, content: m.content }));
+
+    const shouldAttachPreview = (t: string) => {
+      const s = String(t || '').toLowerCase();
+      return (
+        s.includes('preview') ||
+        s.includes('captura') ||
+        s.includes('screenshot') ||
+        s.includes('render') ||
+        s.includes('frames') ||
+        s.includes('frame') ||
+        s.includes('video') ||
+        s.includes('mp4')
+      );
     };
 
-    const handleUpdate = (draftNodes: any[], draftConnections: any[]) => {
-      const mappedNodes: ShaderNode[] = draftNodes.map((n: any) => {
-        const mod = getNodeModule(n.type);
-        const initialData = mod?.initialData ? (mod.initialData(n.id) as any) : {};
-        const aiData = (n.data && typeof n.data === 'object') ? { ...n.data } : {};
-        if (n.dataValue !== undefined && aiData.value === undefined) aiData.value = n.dataValue;
+    const shouldAutoFollowupAfterUpload = (t: string) => {
+      const s = String(t || '').trim().toLowerCase();
+      if (!s) return false;
+      if (s.startsWith('/loadimage')) return false;
 
-        const node: ShaderNode = {
-          ...getDefinitionOrPlaceholder(n.type),
-          ...n,
-          id: n.id,
-          x: n.x ?? 0,
-          y: n.y ?? 0,
-          data: { ...initialData, ...aiData },
-        };
-        // Restore custom sockets if they were lost in the AI/Serialization roundtrip
-        if (node.type === 'customFunction' && node.data.customInputs) {
-          node.inputs = node.data.customInputs;
-          node.outputs = node.data.customOutputs || node.outputs;
+      // Heuristic: if user clearly asks to *use* the attached image (as texture) or *modify* it.
+      const wantsUse = s.includes('use this image') || s.includes('use the image') || s.includes('usa esta imagen') || s.includes('usar esta imagen');
+      const mentionsTexture = s.includes('texture') || s.includes('textura');
+      const wantsDesaturate = s.includes('remove the color') || s.includes('remove color') || s.includes('grayscale') || s.includes('grey scale') || s.includes('desatur') || s.includes('escala de grises') || s.includes('sin color');
+      const mentionsBlend = s.includes('blend') || s.includes('combinar') || s.includes('multiplicar') || s.includes('color node') || s.includes('nodo de color');
+      const wantsEdit = s.includes('edit') || s.includes('modify') || s.includes('editar') || s.includes('modificar');
+
+      return (wantsUse && mentionsTexture) || wantsDesaturate || mentionsBlend || wantsEdit;
+    };
+
+    const wantsSequence = (t: string) => {
+      const s = String(t || '').toLowerCase();
+      return s.includes('video') || s.includes('mp4') || s.includes('frames') || s.includes('secuencia');
+    };
+
+    const isTimeVaryingPreview = (targetNodeId: string) => {
+      const byId = new Map(nodes.map(n => [n.id, n] as const));
+      const incoming = new Map<string, Connection[]>();
+      for (const c of connections) {
+        if (!incoming.has(c.targetNodeId)) incoming.set(c.targetNodeId, []);
+        incoming.get(c.targetNodeId)!.push(c);
+      }
+
+      const visited = new Set<string>();
+      const queue: string[] = [targetNodeId];
+      const MAX_VISIT = 200;
+
+      while (queue.length && visited.size < MAX_VISIT) {
+        const id = queue.shift()!;
+        if (visited.has(id)) continue;
+        visited.add(id);
+
+        const n = byId.get(id);
+        const t = String(n?.type || '');
+        if (t === 'time') return true;
+        if (t === 'customFunction') {
+          const code = String((n as any)?.data?.code || '');
+          if (/\bu_time\b/.test(code)) return true;
         }
-        if (node.type === 'remap' && !node.data.inputValues) node.data.inputValues = { inMinMax: { x: -1, y: 1 }, outMinMax: { x: 0, y: 1 } };
-        return node;
-      });
-      setNodes(mappedNodes);
-      setConnections(draftConnections.map((c: any) => ({ ...c, id: c.id || `conn-${Math.random()}` })));
+
+        for (const c of incoming.get(id) || []) {
+          if (c?.sourceNodeId) queue.push(c.sourceNodeId);
+        }
+      }
+
+      return false;
     };
 
-    const handleVisualRequest = async (nodeId: string) => {
-      // Small tick to ensure React state update -> DOM update -> Canvas render
-      await new Promise(r => requestAnimationFrame(r));
+    const fulfillPreviewRequests = async (requests: Array<any>): Promise<AgentMessagePart[]> => {
+      const parts: AgentMessagePart[] = [];
+      const safe = Array.isArray(requests) ? requests : [];
+      const cap = safe.slice(0, 2);
+      parts.push({ text: `PREVIEW_REQUEST_FULFILLMENT round=${previewRequestRound + 1} count=${cap.length}` });
 
-      const isAnimated = /agua|movimiento|onda|fluir|viento|anima|time|tiempo/i.test(finalPrompt);
+      for (const r of cap) {
+        const nodeId = String(r?.nodeId || '').trim();
+        if (!nodeId) continue;
 
-      if (isAnimated) {
-        // Capture 5 frames over 2 seconds for motion analysis
-        const frames = await previewSystem.captureSequence(nodeId, 2.0, 2.5);
-        return frames[frames.length - 1] || null;
+        const kind = (String(r?.kind || 'png').toLowerCase() === 'sequence') ? 'sequence' : 'png';
+        const previewMode = (String(r?.previewMode || '').toLowerCase() === '2d') ? '2d' : (String(r?.previewMode || '').toLowerCase() === '3d') ? '3d' : undefined;
+        const rawObj = String(r?.previewObject || '').toLowerCase();
+        const previewObject = (rawObj === 'sphere' || rawObj === 'box' || rawObj === 'quad') ? (rawObj as any) : 'box';
+
+        const overrides: any = {};
+        if (previewMode) overrides.mode = previewMode;
+        if (previewObject) overrides.previewObject = previewObject;
+
+        const canAnimate = isTimeVaryingPreview(nodeId);
+        const durationSec = Number(r?.durationSec);
+        const fps = Number(r?.fps);
+        const seqDuration = Number.isFinite(durationSec) && durationSec > 0 ? durationSec : 4.0;
+        const seqFps = Number.isFinite(fps) && fps > 0 ? Math.floor(fps) : 2;
+
+        try {
+          if (kind === 'sequence' && canAnimate) {
+            const frames = await (previewSystem as any).captureSequenceWithOverrides(nodeId, overrides, seqDuration, seqFps);
+            if (frames?.length) {
+              parts.push({ text: `NODE_PREVIEW_SEQUENCE nodeId=${nodeId} mode=${previewMode || 'inherit'} object=${previewObject || 'inherit'} frames=${frames.length} fps=${seqFps} duration=${seqDuration}` });
+              for (const f of frames.slice(0, 8)) {
+                const inline = parseInlineData(String(f));
+                if (inline) parts.push({ inline_data: inline });
+              }
+            } else {
+              parts.push({ text: `NODE_PREVIEW_CAPTURE_FAILED nodeId=${nodeId} kind=sequence` });
+            }
+          } else {
+            if (kind === 'sequence' && !canAnimate) {
+              parts.push({ text: `NODE_PREVIEW_STATIC nodeId=${nodeId} reason=no_time_dependency requested=sequence` });
+            }
+            const png = (previewSystem as any).capturePreviewWithOverrides
+              ? (previewSystem as any).capturePreviewWithOverrides(nodeId, overrides)
+              : previewSystem.capturePreview(nodeId);
+            const inline = png ? parseInlineData(String(png)) : null;
+            if (inline) {
+              parts.push({ text: `NODE_PREVIEW nodeId=${nodeId} mode=${previewMode || 'inherit'} object=${previewObject || 'inherit'}` });
+              parts.push({ inline_data: inline });
+            } else {
+              parts.push({ text: `NODE_PREVIEW_CAPTURE_FAILED nodeId=${nodeId} kind=png` });
+            }
+          }
+        } catch {
+          parts.push({ text: `NODE_PREVIEW_CAPTURE_FAILED nodeId=${nodeId}` });
+        }
+      }
+
+      return parts;
+    };
+
+    const userParts: AgentMessagePart[] = [];
+    if (finalPrompt.trim()) userParts.push({ text: finalPrompt });
+
+    if (attachment) {
+      const s = String(attachment);
+      const inline = parseInlineData(s);
+      if (inline) {
+        userParts.push({ inline_data: inline });
+      } else if (/^https?:\/\//i.test(s)) {
+        // userParts.push({ image_url: s });
+        userParts.push({ text: `ATTACHMENT_URL:\n${s}` });
       } else {
-        return previewSystem.capturePreview(nodeId);
+        userParts.push({ text: `ATTACHMENT:\n${s}` });
       }
+    }
+
+    const outputPreviewFallbackIds = () => {
+      // Prefer the node that feeds the master output color.
+      const outConn = connections.find(c => c.targetNodeId === 'output' && c.targetSocketId === 'color');
+      if (outConn?.sourceNodeId) return [outConn.sourceNodeId];
+      return [] as string[];
     };
 
-    const result = await geminiService.generateOrModifyGraph(finalPrompt, nodes, connections, sessionAssets, attachment, handleLog, handleUpdate, handleVisualRequest);
-    const draft = (result as any)?.graph ?? result;
-    const responseText = (result as any)?.responseText as string | undefined;
-    const meta = (result as any)?.meta as any | undefined;
+    // If the user asks for previews/frames/video, capture node previews and attach.
+    // Priority: attached nodes (paperclip). Fallback: node feeding output.color.
+    // Keep it small and deterministic.
+    if (shouldAttachPreview(finalPrompt)) {
+      const targetIds = (attachedNodeIds.size ? Array.from(attachedNodeIds) : outputPreviewFallbackIds()).slice(0, 2);
+      if (!targetIds.length) {
+        // No suitable node to preview.
+      } else {
+        try {
+          const requestedSequence = wantsSequence(finalPrompt);
+          const primaryId = targetIds[0];
+          const canAnimate = primaryId ? isTimeVaryingPreview(primaryId) : false;
 
-    if (responseText) setLastResponseText(responseText);
-
-    if (meta) {
-      setLastAiMeta(meta);
-      if (meta.usedPersistentChat) handleLog('Chat: persistent editor session enabled.');
-      if (meta.omittedDynamicGraphContext) handleLog('Chat: using baseline/history (omitting dynamic snapshot).');
-    }
-
-    if (!draft || !draft.nodes) {
-      setLinterLogs(prev => [...prev, 'Failed to generate draft.']);
-      setGenerationPhase('idle');
-      suppressManualHistoryRef.current = false;
-      return;
-    }
-
-    // Final Architecture Polish
-    setGenerationPhase('linting');
-    const finalNodes = draft.nodes.map((n: any) => {
-      const mod = getNodeModule(n.type);
-      const initialData = mod?.initialData ? (mod.initialData(n.id) as any) : {};
-      const aiData = (n.data && typeof n.data === 'object') ? { ...n.data } : {};
-      if (n.dataValue !== undefined && aiData.value === undefined) aiData.value = n.dataValue;
-
-      const node: ShaderNode = {
-        ...getDefinitionOrPlaceholder(n.type),
-        ...n,
-        id: n.id,
-        x: n.x ?? 0,
-        y: n.y ?? 0,
-        data: { ...initialData, ...aiData },
-      };
-      if (node.type === 'customFunction' && node.data.customInputs) {
-        node.inputs = node.data.customInputs;
-        node.outputs = node.data.customOutputs || node.outputs;
+          if (requestedSequence && canAnimate && primaryId) {
+            const frames = await previewSystem.captureSequence(primaryId, 4.0, 2);
+            if (frames.length) {
+              userParts.push({ text: `NODE_PREVIEW_SEQUENCE nodeId=${primaryId} frames=${frames.length}` });
+              for (const f of frames.slice(0, 8)) {
+                const inline = parseInlineData(String(f));
+                if (inline) userParts.push({ inline_data: inline });
+              }
+            }
+          } else {
+            if (requestedSequence && primaryId && !canAnimate) {
+              userParts.push({ text: `NODE_PREVIEW_STATIC nodeId=${primaryId} reason=no_time_dependency` });
+            }
+            for (const nodeId of targetIds) {
+              const png = previewSystem.capturePreview(nodeId);
+              const inline = png ? parseInlineData(String(png)) : null;
+              if (!inline) continue;
+              userParts.push({ text: `NODE_PREVIEW nodeId=${nodeId}` });
+              userParts.push({ inline_data: inline });
+            }
+          }
+        } catch {
+          // ignore preview capture failures
+        }
       }
-      if (node.type === 'remap' && !node.data.inputValues) node.data.inputValues = { inMinMax: { x: -1, y: 1 }, outMinMax: { x: 0, y: 1 } };
-      return node;
-    });
-    const finalConns = draft.connections.map((c: any) => ({ ...c, id: c.id || `conn-${Math.random()}` }));
+    }
 
-    const logs = lintGraph(finalNodes, finalConns);
-    setLinterLogs(prev => [...prev, logs.length > 0 ? 'Linter found issues. Fixing...' : 'Graph structure validated.']);
+    if (userParts.length) {
+      messages.push({ role: 'user', content: userParts });
+    } else {
+      messages.push({ role: 'user', content: finalPrompt });
+    }
 
-    setGenerationPhase('refining');
-
-    // Final Visual QC Pass
-    await new Promise(r => requestAnimationFrame(r));
-    const finalImage = previewSystem.capturePreview('output') || previewSystem.capturePreview(finalNodes[finalNodes.length - 1].id);
-
-    const refined = await geminiService.refineGraph(draft, logs, meta?.agent || 'architect', handleLog, finalImage || undefined);
-
-    // Choose refined version only if it is not degenerate.
-    // Some refinement responses can accidentally return only the master nodes (vertex/output),
-    // which would look like the scene was "cleared".
-    const isUsableGraph = (g: any) => {
-      const nodesArr = Array.isArray(g?.nodes) ? g.nodes : [];
-      const connsArr = Array.isArray(g?.connections) ? g.connections : [];
-      const hasNonMasterNode = nodesArr.some((n: any) => n && n.id && n.id !== 'output' && n.id !== 'vertex');
-      const hasAnyConnection = connsArr.length > 0;
-      const hasOutputIncoming = connsArr.some((c: any) => c && c.targetNodeId === 'output');
-      return hasNonMasterNode && hasAnyConnection && hasOutputIncoming;
+    const requestGraph = {
+      nodes: nodes.map(n => ({
+        id: n.id,
+        type: n.type,
+        label: n.label,
+        x: n.x,
+        y: n.y,
+        data: n.data ?? {},
+      })),
+      connections: connections.map(c => ({
+        id: c.id,
+        sourceNodeId: c.sourceNodeId,
+        sourceSocketId: c.sourceSocketId,
+        targetNodeId: c.targetNodeId,
+        targetSocketId: c.targetSocketId,
+      })),
     };
 
-    const finalResult = (refined && isUsableGraph(refined)) ? refined : draft;
-    if (refined && finalResult === draft) {
-      setLinterLogs(prev => [...prev, 'Refine produced a degenerate graph; keeping the draft to avoid clearing the scene.']);
-    }
+    const applyOps = (ops: AgentGraphOperation[]) => {
+      let nextNodes = [...nodes];
+      let nextConnections = [...connections];
+      let nextAssets = [...sessionAssets];
 
-    const newNodes: ShaderNode[] = finalResult.nodes.map((n: any) => {
-      const mod = getNodeModule(n.type);
-      const initialData = mod?.initialData ? (mod.initialData(n.id) as any) : {};
-      const aiData = (n.data && typeof n.data === 'object') ? { ...n.data } : {};
-      if (n.dataValue !== undefined && aiData.value === undefined) aiData.value = n.dataValue;
+      const agentBaseUrl = getAgentBaseUrl();
 
-      const node: ShaderNode = {
-        ...getDefinitionOrPlaceholder(n.type),
-        ...n,
-        id: n.id,
-        x: n.x ?? 0,
-        y: n.y ?? 0,
-        data: { ...initialData, ...aiData },
+      const looksLikeUrl = (s: string) => {
+        const v = String(s || '').trim();
+        return (
+          v.startsWith('data:') ||
+          v.startsWith('http://') ||
+          v.startsWith('https://') ||
+          v.startsWith('blob:') ||
+          v.startsWith('/')
+        );
       };
-      if (node.type === 'customFunction' && node.data.customInputs) {
-        node.inputs = node.data.customInputs;
-        node.outputs = node.data.customOutputs || node.outputs;
+
+      const toHexChannel = (n: number) => {
+        const clamped = Math.max(0, Math.min(255, Math.round(n)));
+        return clamped.toString(16).padStart(2, '0');
+      };
+
+      const rgbaToHex = (rgba: any): string | null => {
+        if (!Array.isArray(rgba) || rgba.length < 3) return null;
+        const raw = rgba.slice(0, 3).map((v: any) => Number(v));
+        if (raw.some(v => Number.isNaN(v))) return null;
+
+        const max = Math.max(...raw);
+        const scale = max <= 1 ? 255 : 1;
+        const [r, g, b] = raw.map(v => v * scale);
+        return `#${toHexChannel(r)}${toHexChannel(g)}${toHexChannel(b)}`;
+      };
+
+      const connKey = (c: Connection) => `${c.sourceNodeId}:${c.sourceSocketId}->${c.targetNodeId}:${c.targetSocketId}`;
+
+      const ensureRemapDefaults = (node: ShaderNode) => {
+        if (node.type === 'remap' && !node.data?.inputValues) {
+          node.data = { ...(node.data || {}), inputValues: { inMinMax: { x: -1, y: 1 }, outMinMax: { x: 0, y: 1 } } };
+        }
+      };
+
+      for (const op of ops || []) {
+        if (!op || typeof op !== 'object') continue;
+
+        if (op.op === 'add_node') {
+          if (!op.nodeId || !op.nodeType) continue;
+          if (nextNodes.some(n => n.id === op.nodeId)) continue;
+          const mod = getNodeModule(op.nodeType);
+          const def = getDefinitionOrPlaceholder(op.nodeType);
+          const initialData = mod?.initialData ? (mod.initialData(op.nodeId) as any) : {};
+          const node: ShaderNode = {
+            id: op.nodeId,
+            ...def,
+            x: op.x ?? 0,
+            y: op.y ?? 0,
+            data: { ...initialData },
+          };
+          ensureRemapDefaults(node);
+          nextNodes.push(node);
+          continue;
+        }
+
+        if (op.op === 'remove_node') {
+          if (!op.nodeId) continue;
+          nextNodes = nextNodes.filter(n => n.id !== op.nodeId);
+          nextConnections = nextConnections.filter(c => c.sourceNodeId !== op.nodeId && c.targetNodeId !== op.nodeId);
+          continue;
+        }
+
+        if (op.op === 'move_node') {
+          if (!op.nodeId) continue;
+          nextNodes = nextNodes.map(n => (n.id === op.nodeId ? { ...n, x: op.x ?? n.x, y: op.y ?? n.y } : n));
+          continue;
+        }
+
+        if (op.op === 'update_node_data') {
+          if (!op.nodeId || !op.dataKey) continue;
+          const dataKey = String(op.dataKey);
+          nextNodes = nextNodes.map(n => {
+            if (n.id !== op.nodeId) return n;
+            const next: ShaderNode = { ...n, data: { ...(n.data || {}) } };
+
+            if (dataKey === 'label') {
+              next.label = String(op.dataValue ?? '');
+              return next;
+            }
+
+            // Compatibility: some backend ops may use `color: [r,g,b,a]` for color nodes.
+            if (next.type === 'color' && dataKey === 'color') {
+              const asHex = typeof op.dataValue === 'string' ? String(op.dataValue) : rgbaToHex(op.dataValue);
+              if (asHex && asHex.startsWith('#')) {
+                (next.data as any).value = asHex;
+                return next;
+              }
+            }
+
+            let effectiveValue = op.dataValue;
+
+            // Allow explicit inputValues updates (backend can send `inputValues.foo`).
+            const explicitInputValuesPrefix = 'inputValues.';
+            if (dataKey.startsWith(explicitInputValuesPrefix)) {
+              const key = dataKey.slice(explicitInputValuesPrefix.length);
+              const prevInputValues = ((next.data as any).inputValues && typeof (next.data as any).inputValues === 'object')
+                ? (next.data as any).inputValues
+                : {};
+              (next.data as any).inputValues = { ...prevInputValues, [key]: effectiveValue };
+              ensureRemapDefaults(next);
+              return next;
+            }
+
+            // If the backend wires a generated/known assetId into a texture control, normalize to a URL.
+            if (dataKey === 'textureAsset' && typeof op.dataValue === 'string' && !looksLikeUrl(op.dataValue)) {
+              effectiveValue = `${agentBaseUrl}/api/v1/assets/${encodeURIComponent(op.dataValue)}`;
+            }
+
+            // Many nodes store default socket parameters in `data.inputValues` (e.g. saturation.saturation).
+            // If the key matches an input socket AND the node has inputValues, update there so the UI reflects it.
+            const mod = getNodeModule(next.type);
+            const defInputs = (mod?.definition?.inputs || next.inputs || []) as any[];
+            const isInputSocket = Array.isArray(defInputs) && defInputs.some(s => s && s.id === dataKey);
+            const hasInputValues = (next.data as any).inputValues && typeof (next.data as any).inputValues === 'object';
+            const isDataField = dataKey === 'textureAsset' || dataKey === 'textureType' || dataKey === 'space' || dataKey === 'samplerWrap' || dataKey === 'samplerFilter';
+
+            if (isInputSocket && hasInputValues && !isDataField) {
+              (next.data as any).inputValues = { ...(next.data as any).inputValues, [dataKey]: effectiveValue };
+            } else {
+              (next.data as any)[dataKey] = effectiveValue;
+            }
+            ensureRemapDefaults(next);
+            return next;
+          });
+          continue;
+        }
+
+        if (op.op === 'add_connection') {
+          if (!op.sourceNodeId || !op.sourceSocketId || !op.targetNodeId || !op.targetSocketId) continue;
+          const id = op.connectionId || `conn-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+          const candidate: Connection = {
+            id,
+            sourceNodeId: op.sourceNodeId,
+            sourceSocketId: op.sourceSocketId,
+            targetNodeId: op.targetNodeId,
+            targetSocketId: op.targetSocketId,
+          };
+
+          const exists = nextConnections.some(c => c.id === candidate.id || connKey(c) === connKey(candidate));
+          if (!exists) nextConnections.push(candidate);
+          continue;
+        }
+
+        if (op.op === 'remove_connection') {
+          if (op.connectionId) {
+            nextConnections = nextConnections.filter(c => c.id !== op.connectionId);
+            continue;
+          }
+          if (op.sourceNodeId && op.sourceSocketId && op.targetNodeId && op.targetSocketId) {
+            const k = `${op.sourceNodeId}:${op.sourceSocketId}->${op.targetNodeId}:${op.targetSocketId}`;
+            nextConnections = nextConnections.filter(c => connKey(c) !== k);
+          }
+          continue;
+        }
+
+        if (op.op === 'upload_asset') {
+          const id = op.assetId || `asset-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+          const name = String(op.assetName || id);
+
+          const provided = op.assetData ? String(op.assetData) : '';
+          const dataUrl = provided
+            ? provided
+            : `${agentBaseUrl}/api/v1/assets/${encodeURIComponent(id)}`;
+
+          let mimeType = String(op.assetMimeType || '').trim();
+          if (!mimeType && dataUrl.startsWith('data:')) {
+            const mimeMatch = String(dataUrl).match(/^data:([^;]+);base64,/);
+            mimeType = mimeMatch ? mimeMatch[1] : '';
+          }
+          if (!mimeType) mimeType = 'application/octet-stream';
+
+          const existingIdx = nextAssets.findIndex(a => a.id === id);
+          const asset: SessionAsset = {
+            id,
+            name,
+            dataUrl,
+            mimeType,
+            createdAt: Date.now(),
+          };
+
+          if (existingIdx >= 0) {
+            nextAssets = [...nextAssets.slice(0, existingIdx), asset, ...nextAssets.slice(existingIdx + 1)];
+          } else {
+            nextAssets.push(asset);
+          }
+          continue;
+        }
       }
-      if (node.type === 'remap' && !node.data.inputValues) node.data.inputValues = { inMinMax: { x: -1, y: 1 }, outMinMax: { x: 0, y: 1 } };
-      return node;
-    });
 
-    const newConnections: Connection[] = finalResult.connections.map((c: any) => ({ ...c, id: c.id || `conn-${Math.random()}` }));
+      const sanitized = sanitizeConnections(nextNodes, nextConnections);
+      nextConnections = sanitized.connections;
 
-    setNodes(newNodes);
-    setConnections(newConnections);
+      setNodes(nextNodes);
+      setConnections(nextConnections);
+      setSessionAssets(nextAssets);
 
-    // Persisted chat lifecycle rules:
-    // - Always set baseline after an AI-applied change.
-    geminiService.setPersistentGraphBaseline(newNodes, newConnections);
-    // - If this was a "generate" (architect) run, clear the chat session so edits start fresh.
-    if (meta?.agent === 'architect' || meta?.command === 'generate') {
-      geminiService.resetPersistentGraphSession();
-      geminiService.setPersistentGraphBaseline(newNodes, newConnections);
-    }
-
-    suppressManualHistoryRef.current = false;
-
-    setGenerationPhase('idle');
-  };
-
-  const runGeminiTexturePipeline = async (texturePrompt: string, referenceAttachment?: string) => {
-    const cleanPrompt = String(texturePrompt || '').trim();
-    if (!cleanPrompt && !referenceAttachment) return;
-
-    setGenerationPhase('routing');
-    setLinterLogs(['Inferring texture intent...']);
-
-    const handleLog = (msg: string) => setLinterLogs(prev => [...prev, msg]);
+      if (sanitized.fixedCount || sanitized.droppedCount) {
+        setLinterLogs(prev => [
+          ...prev,
+          `Graph fixup: ${sanitized.fixedCount} socket id fixes, ${sanitized.droppedCount} invalid connections dropped.`,
+        ]);
+      }
+    };
 
     try {
-      const inferred = await geminiService.inferTextureRequest(cleanPrompt, handleLog);
-      const imagePrompt = inferred?.imagePrompt || cleanPrompt;
-      const targetNodeId = inferred?.target?.nodeId || 'output';
-      const targetSocketId = inferred?.target?.socketId || 'color';
-      const operation = inferred?.operation || 'multiply';
-      const channel = inferred?.channel || 'rgba';
+      const response = await geminiService.chat({ messages, graph: requestGraph });
+      const opsAll = (response.operations || []) as AgentGraphOperation[];
+      const previewOps = opsAll.filter(op => (op as any)?.op === 'request_previews');
+      const ops = opsAll.filter(op => (op as any)?.op !== 'request_previews');
 
-      handleLog(`Target: ${targetNodeId}.${targetSocketId} (${operation}, channel=${channel})`);
+      // If the agent asks for previews, capture them and re-call the backend once.
+      if (previewOps.length && previewRequestRound < 1) {
+        const requested = previewOps.flatMap(op => Array.isArray((op as any)?.previewRequests) ? (op as any).previewRequests : []);
+        setLinterLogs(prev => [...prev, `Backend requested previews: ${requested.length}`]);
 
-      setLinterLogs(prev => [...prev, 'Generating texture...']);
-      setGenerationPhase('drafting');
-      const generated = await geminiService.generateTextureDataUrl(imagePrompt, referenceAttachment, handleLog);
-      if (!generated?.dataUrl) {
-        handleLog('Texture generation failed.');
-        setGenerationPhase('idle');
+        const previewParts = await fulfillPreviewRequests(requested);
+        const messages2 = [...messages, { role: 'user', content: previewParts } as any];
+
+        const response2 = await geminiService.chat({ messages: messages2, graph: requestGraph });
+        setLastAssistantResponse(response2.message);
+        setLastAiMeta({ agent: 'backend' });
+
+        const ops2All = (response2.operations || []) as AgentGraphOperation[];
+        const ops2 = ops2All.filter(op => (op as any)?.op !== 'request_previews');
+
+        const opSummary2 = ops2.slice(0, 20).map(op => {
+          if (!op || typeof op !== 'object') return 'OP: <invalid>';
+          if (op.op === 'add_node') return `OP: add_node ${op.nodeType || ''} id=${op.nodeId || ''}`.trim();
+          if (op.op === 'remove_node') return `OP: remove_node id=${op.nodeId || ''}`.trim();
+          if (op.op === 'add_connection') return `OP: add_connection ${op.sourceNodeId || ''}.${op.sourceSocketId || ''} -> ${op.targetNodeId || ''}.${op.targetSocketId || ''}`.trim();
+          if (op.op === 'remove_connection') return `OP: remove_connection ${op.connectionId || ''}`.trim();
+          if (op.op === 'update_node_data') return `OP: update_node_data id=${op.nodeId || ''} ${op.dataKey || ''}=${JSON.stringify(op.dataValue)}`.trim();
+          if (op.op === 'upload_asset') return `OP: upload_asset id=${op.assetId || ''} name=${op.assetName || ''}`.trim();
+          if (op.op === 'edit_image') return `OP: edit_image asset=${op.sourceAssetId || ''}`.trim();
+          return `OP: ${String((op as any).op || 'unknown')}`;
+        });
+
+        setLinterLogs(prev => [
+          ...prev,
+          `Backend (after previews): ${ops2.length} ops`,
+          ...opSummary2,
+        ]);
+
+        applyOps(ops2);
         return;
       }
 
-      // Auto-save generated texture into the session library
-      setSessionAssets(prev => {
-        const id = `asset-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
-        const name = `gen-texture-${new Date().toISOString().replace(/[:.]/g, '-')}`;
-        return [...prev, { id, name, dataUrl: generated.dataUrl, mimeType: generated.mimeType, createdAt: Date.now() }];
+      setLastAssistantResponse(response.message);
+      setLastAiMeta({ agent: 'backend' });
+      const opSummary = ops.slice(0, 20).map(op => {
+        if (!op || typeof op !== 'object') return 'OP: <invalid>';
+        if (op.op === 'add_node') return `OP: add_node ${op.nodeType || ''} id=${op.nodeId || ''}`.trim();
+        if (op.op === 'remove_node') return `OP: remove_node id=${op.nodeId || ''}`.trim();
+        if (op.op === 'add_connection') return `OP: add_connection ${op.sourceNodeId || ''}.${op.sourceSocketId || ''} -> ${op.targetNodeId || ''}.${op.targetSocketId || ''}`.trim();
+        if (op.op === 'remove_connection') return `OP: remove_connection ${op.connectionId || ''}`.trim();
+        if (op.op === 'update_node_data') return `OP: update_node_data id=${op.nodeId || ''} ${op.dataKey || ''}=${JSON.stringify(op.dataValue)}`.trim();
+        if (op.op === 'upload_asset') return `OP: upload_asset id=${op.assetId || ''} name=${op.assetName || ''}`.trim();
+        if (op.op === 'edit_image') return `OP: edit_image asset=${op.sourceAssetId || ''}`.trim();
+        return `OP: ${String((op as any).op || 'unknown')}`;
       });
 
-      applyTextureDataUrlToTarget({
-        dataUrl: generated.dataUrl,
-        mimeType: generated.mimeType,
-        targetNodeId,
-        targetSocketId,
-        operation,
-        channel,
-        log: handleLog,
-      });
+      const traceThoughts: string[] = [];
+      const rawTrace = (response as any)?.thought_process;
+      if (rawTrace) {
+        try {
+          const parsed = typeof rawTrace === 'string' ? JSON.parse(rawTrace) : rawTrace;
+          if (Array.isArray(parsed)) {
+            for (const ev of parsed.slice(0, 40)) {
+              if (ev?.type === 'call') {
+                traceThoughts.push(`THOUGHT:TRACE call ${ev.name} ${JSON.stringify(ev.args ?? {})}`);
+              } else if (ev?.type === 'response') {
+                traceThoughts.push(`THOUGHT:TRACE response ${ev.name} ${JSON.stringify(ev.response ?? null)}`);
+              } else {
+                traceThoughts.push(`THOUGHT:TRACE ${JSON.stringify(ev)}`);
+              }
+            }
+          } else {
+            traceThoughts.push(`THOUGHT:TRACE ${typeof rawTrace === 'string' ? rawTrace : JSON.stringify(rawTrace)}`);
+          }
+        } catch {
+          traceThoughts.push(`THOUGHT:TRACE ${String(rawTrace)}`);
+        }
+      }
+
+      setLinterLogs(prev => [
+        ...prev,
+        `Backend: ${ops.length} ops`,
+        ...opSummary,
+        ...traceThoughts,
+      ]);
+      applyOps(ops);
+
+      // If the backend only uploaded the asset, but the prompt asked to *do* something with it,
+      // automatically re-call once using selectedAssetId (so the agent can reference it without re-uploading).
+      const uploadOnly = ops.length === 1 && ops[0]?.op === 'upload_asset';
+      const uploadedId = uploadOnly ? String((ops[0] as any)?.assetId || '') : '';
+      const isImageAttachment = typeof attachment === 'string' && String(attachment).startsWith('data:image/');
+      const shouldFollow = uploadOnly && isImageAttachment && !selectedAssetId && uploadFollowupRound < 1 && shouldAutoFollowupAfterUpload(prompt);
+
+      if (shouldFollow && uploadedId) {
+        setLinterLogs(prev => [...prev, `Auto-followup: uploaded asset ${uploadedId}; continuing request...`]);
+        await runGeminiPipeline(prompt, undefined, uploadedId, previewRequestRound, uploadFollowupRound + 1);
+        return;
+      }
     } catch (e: any) {
       console.error(e);
-      setLinterLogs(prev => [...prev, `Texture pipeline error: ${e?.message || String(e)}`]);
+      setLinterLogs(prev => [...prev, `Agent error: ${e?.message || String(e)}`]);
     } finally {
+      suppressManualHistoryRef.current = false;
       setGenerationPhase('idle');
     }
   };
@@ -1687,6 +2230,8 @@ const App: React.FC = () => {
   ) => {
     if (!prompt && !attachment) return;
 
+    chatContextRef.current = Array.isArray(chatContext) ? chatContext : null;
+
     const trimmed = String(prompt || '').trim();
     const isSlash = trimmed.startsWith('/');
     const effectivePrompt = (!isSlash && focusText) ? `${focusText}\n\nUSER REQUEST:\n${prompt}` : prompt;
@@ -1694,20 +2239,9 @@ const App: React.FC = () => {
     setLastAssistantResponse(null);
     setLastAiMeta(null);
 
-    let inferredCmd: string | undefined;
-    if (!isSlash) {
-      setGenerationPhase('routing');
-      const intent = await geminiService.inferGlobalIntent(prompt, attachment);
-      if (intent && intent.confidence >= 0.7) {
-        setLinterLogs(prev => [...prev, `Router: inferred ${intent.command} (${Math.round(intent.confidence * 100)}% confidence)`]);
-        inferredCmd = intent.command;
-      }
-    }
-
     const handled = await dispatchCommand(
-      { prompt: effectivePrompt, attachment, chatContext, selectedAssetId, focusText: focusText || undefined, intentCommand: inferredCmd },
+      { prompt: effectivePrompt, attachment, chatContext, selectedAssetId, focusText: focusText || undefined },
       {
-        geminiService,
         nodes,
         connections,
         sessionAssets,
@@ -1718,7 +2252,6 @@ const App: React.FC = () => {
         setLinterLogs,
         addSessionAsset,
         applyTextureDataUrlToTarget,
-        runGeminiTexturePipeline,
         runGeminiPipeline,
         onAssistantResponse: (text: string) => {
           setLastAssistantResponse(text);
@@ -1834,6 +2367,7 @@ const App: React.FC = () => {
           assets={sessionAssets}
           onAddAsset={addSessionAsset}
           onUseAssetAsTextureNode={insertTextureAssetNodeFromAsset}
+          onDeleteAsset={deleteSessionAsset}
           attachedNodes={attachedNodesSummary}
           onClearAttachedNodes={clearAttachedNodes}
         />

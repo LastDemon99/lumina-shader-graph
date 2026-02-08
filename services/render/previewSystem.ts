@@ -498,6 +498,27 @@ class PreviewSystem {
         return tempCanvas.toDataURL('image/png');
     }
 
+    capturePreviewWithOverrides(
+        id: string,
+        overrides: Partial<Pick<RenderItem, 'mode' | 'previewObject' | 'rotation'>>,
+        forceTime?: number
+    ): string | null {
+        const item = this.items.get(id);
+        if (!item) return null;
+
+        const prev = { mode: item.mode, previewObject: item.previewObject, rotation: item.rotation };
+        try {
+            if (overrides.mode) item.mode = overrides.mode;
+            if (overrides.previewObject) item.previewObject = overrides.previewObject;
+            if (overrides.rotation) item.rotation = overrides.rotation;
+            return this.capturePreview(id, forceTime);
+        } finally {
+            item.mode = prev.mode;
+            item.previewObject = prev.previewObject;
+            item.rotation = prev.rotation;
+        }
+    }
+
     /**
      * NEW: Deterministic Time-Warped Frame Simulation.
      * Captures a sequence of frames for motion analysis (Visual QC Stage 2).
@@ -518,6 +539,28 @@ class PreviewSystem {
             if (img) frames.push(img);
 
             // Allow brief breathing room for browser UI
+            if (i % 2 === 0) await new Promise(r => requestAnimationFrame(r));
+        }
+
+        return frames;
+    }
+
+    async captureSequenceWithOverrides(
+        id: string,
+        overrides: Partial<Pick<RenderItem, 'mode' | 'previewObject' | 'rotation'>>,
+        duration: number = 2.0,
+        fps: number = 5
+    ): Promise<string[]> {
+        const item = this.items.get(id);
+        if (!item || !this.gl || !this.canvas) return [];
+
+        const frames: string[] = [];
+        const totalFrames = Math.max(2, duration * fps);
+
+        for (let i = 0; i < totalFrames; i++) {
+            const t = (i / (totalFrames - 1)) * duration;
+            const img = this.capturePreviewWithOverrides(id, overrides, t);
+            if (img) frames.push(img);
             if (i % 2 === 0) await new Promise(r => requestAnimationFrame(r));
         }
 
