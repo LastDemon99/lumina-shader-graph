@@ -1,0 +1,11 @@
+fastapi
+uvicorn
+google-genai
+google-adk
+python-dotenv
+pydantic
+pillow
+imageio
+imageio-ffmpeg
+numpy
+pyjson5
