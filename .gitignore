@@ -24,3 +24,37 @@ dist-ssr
 *.sw?
 
 .env
+
+# --- Backend (Python) ---
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Distribution / packaging
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+build/
+dist/
+sdist/
+wheels/
+share/python-wheels/
+
+# Virtual environments
+venv/
+ENV/
+env/
+.venv/
+
+# Environment variables
+.env.*
+!.env.example
+
+backend/assets_data/*
+backend/storage/*
+
+# OS
+Thumbs.db
+desktop.ini
