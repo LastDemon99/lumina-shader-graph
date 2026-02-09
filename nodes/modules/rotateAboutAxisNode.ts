@@ -20,7 +20,9 @@ export const rotateAboutAxisNode: NodeModule = {
       const rot = ctx.getInput(ctx.id, 'rotation', '0.0', 'float');
       const v = ctx.varName(ctx.id);
 
-      ctx.body.push(`vec3 ${v}_k = normalize(${axis});`);
+      ctx.body.push(`vec3 ${v}_axis = ${axis};`);
+      ctx.body.push(`float ${v}_axisLen = length(${v}_axis);`);
+      ctx.body.push(`vec3 ${v}_k = ${v}_axisLen > 1e-6 ? (${v}_axis / ${v}_axisLen) : vec3(0.0, 1.0, 0.0);`);
       ctx.body.push(`float ${v}_c = cos(${rot});`);
       ctx.body.push(`float ${v}_s = sin(${rot});`);
       ctx.body.push(
