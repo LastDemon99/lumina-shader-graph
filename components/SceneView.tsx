@@ -1,8 +1,9 @@
 
 import React, { useEffect, useRef, useState } from 'react';
-import { Box, Circle, Square, MousePointer2 } from 'lucide-react';
+import { Box, Circle, Square, MousePointer2, Upload, Layers } from 'lucide-react';
 import { mat4, createCube, createSphere, createPlane } from '../services/render/renderUtils';
 import { createWebGLContext, createProgram, createPlaceholderTexture, loadTexture, applyTextureParams } from '../services/render/webglUtils';
+import { parseOBJ, type GeometryData } from '../services/render/objLoader';
 
 interface TextureConfig {
     url: string;
@@ -16,10 +17,28 @@ interface SceneViewProps {
     active: boolean;
     textures?: Record<string, TextureConfig>;
     showControls?: boolean;
-    forcedMesh?: 'cube' | 'sphere' | 'plane';
+    forcedMesh?: 'cube' | 'sphere' | 'plane' | 'obj';
     autoRotate?: boolean;
     cameraDistance?: number;
     mode?: '2d' | '3d';
+    rotation?: { x: number; y: number };
+    onRotationChange?: (rotation: { x: number; y: number }) => void;
+
+    // Shared imported model (single slot; overwritten on each import)
+    objModel?: GeometryData | null;
+    objBounds?: { min: [number, number, number]; max: [number, number, number] } | null;
+    allowObjImport?: boolean;
+    onObjModelChange?: (payload: { geo: GeometryData; bounds: { min: [number, number, number]; max: [number, number, number] } }) => void;
+
+    // Optional external control for mode/mesh when forcedMesh is used
+    onModeChange?: (mode: '2d' | '3d') => void;
+    onMeshChange?: (mesh: 'cube' | 'sphere' | 'plane' | 'obj') => void;
+
+    // Optional fixed render size override (useful for export)
+    renderSizeOverride?: { width: number; height: number } | null;
+
+    // Optional hook for capture/export
+    onCanvasReady?: (canvas: HTMLCanvasElement | null) => void;
 }
 
 export const SceneView: React.FC<SceneViewProps> = ({
@@ -31,7 +50,18 @@ export const SceneView: React.FC<SceneViewProps> = ({
     forcedMesh,
     autoRotate = false,
     cameraDistance = 4.0,
-    mode = '3d'
+    mode = '3d',
+    rotation,
+    onRotationChange,
+    objModel = null,
+    objBounds = null,
+    allowObjImport = false,
+    onObjModelChange,
+    onModeChange,
+    onMeshChange
+    ,
+    renderSizeOverride = null,
+    onCanvasReady
 }) => {
     const canvasRef = useRef<HTMLCanvasElement>(null);
     const glRef = useRef<WebGL2RenderingContext | null>(null);
@@ -43,17 +73,41 @@ export const SceneView: React.FC<SceneViewProps> = ({
     const loadedSourcesRef = useRef<Record<string, string>>({}); // Track sources to detect URL changes
     const missingTextureRef = useRef<WebGLTexture | null>(null);
 
-    const [localMesh, setLocalMesh] = useState<'cube' | 'sphere' | 'plane'>('cube');
+    const [localMesh, setLocalMesh] = useState<'cube' | 'sphere' | 'plane' | 'obj'>('cube');
     const activeMesh = forcedMesh || localMesh;
 
-    const [rotation, setRotation] = useState({ x: 0.5, y: 0.5 });
+    const currentRotationRef = useRef<{ x: number; y: number }>(rotation || { x: 0.5, y: 0.5 });
     const isDragging = useRef(false);
     const lastMouse = useRef({ x: 0, y: 0 });
+    const pendingRotationRafRef = useRef<number | null>(null);
+
+    const objFileInputRef = useRef<HTMLInputElement>(null);
+
+    useEffect(() => {
+        if (!rotation) return;
+        // Avoid fighting local pointer updates while dragging.
+        if (isDragging.current) return;
+        currentRotationRef.current = rotation;
+    }, [rotation?.x, rotation?.y]);
+
+    useEffect(() => {
+        return () => {
+            if (pendingRotationRafRef.current !== null) {
+                cancelAnimationFrame(pendingRotationRafRef.current);
+                pendingRotationRafRef.current = null;
+            }
+        };
+    }, []);
 
     // Use utils for consistent geometry
     const cubeData = useRef(createCube());
     const sphereData = useRef(createSphere(1, 32, 32)); // High res for main view
     const planeData = useRef(createPlane());
+
+    useEffect(() => {
+        onCanvasReady?.(canvasRef.current);
+        return () => onCanvasReady?.(null);
+    }, [onCanvasReady]);
 
     // Texture Management
     useEffect(() => {
@@ -164,8 +218,8 @@ export const SceneView: React.FC<SceneViewProps> = ({
                 return;
             }
 
-            const displayWidth = canvas.clientWidth;
-            const displayHeight = canvas.clientHeight;
+            const displayWidth = renderSizeOverride?.width ?? canvas.clientWidth;
+            const displayHeight = renderSizeOverride?.height ?? canvas.clientHeight;
             if (canvas.width !== displayWidth || canvas.height !== displayHeight) {
                 canvas.width = displayWidth;
                 canvas.height = displayHeight;
@@ -221,8 +275,10 @@ export const SceneView: React.FC<SceneViewProps> = ({
             });
 
             // Geometry Selection
-            const geo = activeMesh === 'cube' ? cubeData.current :
-                activeMesh === 'sphere' ? sphereData.current : planeData.current;
+            const geo = activeMesh === 'obj' && objModel
+                ? objModel
+                : activeMesh === 'cube' ? cubeData.current :
+                    activeMesh === 'sphere' ? sphereData.current : planeData.current;
 
             // If the shader doesn't expose a usable position attribute, don't clear the canvas.
             // This avoids the "scene reset" feeling when a temporary/invalid shader is produced during refine.
@@ -234,6 +290,16 @@ export const SceneView: React.FC<SceneViewProps> = ({
                 }
                 reqIdRef.current = requestAnimationFrame(render);
                 return;
+            }
+
+            // Depth is required for correct occlusion when rotating meshes.
+            // Without this, triangles draw in submission order and can look "broken" when the object turns.
+            if (mode === '3d') {
+                gl.enable(gl.DEPTH_TEST);
+                gl.depthFunc(gl.LEQUAL);
+                gl.clearDepth(1.0);
+            } else {
+                gl.disable(gl.DEPTH_TEST);
             }
 
             gl.clearColor(0.05, 0.05, 0.05, 1.0);
@@ -275,6 +341,7 @@ export const SceneView: React.FC<SceneViewProps> = ({
             const idxBuff = gl.createBuffer();
             gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, idxBuff);
             gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, geo.indices, gl.STATIC_DRAW);
+            const indexType = geo.indices instanceof Uint32Array ? gl.UNSIGNED_INT : gl.UNSIGNED_SHORT;
 
             const aspect = canvas.width / canvas.height;
             const projection = new Float32Array(16);
@@ -296,8 +363,9 @@ export const SceneView: React.FC<SceneViewProps> = ({
                     mat4.rotateY(model, model, time * 0.001);
                 } else {
                     // Turntable rotation: Y (world) then X (local)
-                    mat4.rotateY(model, model, rotation.x);
-                    mat4.rotateX(model, model, rotation.y);
+                    const rot = currentRotationRef.current;
+                    mat4.rotateY(model, model, rot.x);
+                    mat4.rotateX(model, model, rot.y);
                 }
             }
 
@@ -344,12 +412,15 @@ export const SceneView: React.FC<SceneViewProps> = ({
             if (uCamFar) gl.uniform1f(uCamFar, camFar);
             if (uCamOrtho) gl.uniform1f(uCamOrtho, isOrtho);
 
-            let localMin = [-1, -1, -1];
-            let localMax = [1, 1, 1];
+            let localMin: [number, number, number] = [-1, -1, -1];
+            let localMax: [number, number, number] = [1, 1, 1];
 
             if (activeMesh === 'plane') {
                 localMin = [-1, -1, 0];
                 localMax = [1, 1, 0];
+            } else if (activeMesh === 'obj' && objBounds) {
+                localMin = objBounds.min;
+                localMax = objBounds.max;
             }
 
             const corners = [
@@ -387,23 +458,45 @@ export const SceneView: React.FC<SceneViewProps> = ({
             const uBoundsMax = gl.getUniformLocation(programRef.current, 'u_boundsMax');
             if (uBoundsMax) gl.uniform3f(uBoundsMax, worldMax[0], worldMax[1], worldMax[2]);
 
-            // Transparency: to see back faces through front faces on the same mesh,
-            // draw back faces first and front faces second while disabling depth writes.
-            // This matches the node Preview behavior (PreviewSystem) and avoids the
-            // classic "transparent object looks opaque" self-occlusion problem.
-            gl.depthMask(false);
-            gl.enable(gl.CULL_FACE);
+            // We render in 3 steps:
+            // 1) Depth pre-pass (no color) to populate the depth buffer.
+            // 2) Back faces
+            // 3) Front faces
+            // This keeps the "see both sides" behavior for transparent shaders,
+            // while still having correct occlusion within the mesh.
+            if (mode === '3d') {
+                gl.enable(gl.CULL_FACE);
 
-            // Pass 1: draw back-facing triangles (the far panels)
-            gl.cullFace(gl.FRONT);
-            gl.drawElements(gl.TRIANGLES, geo.indices.length, gl.UNSIGNED_SHORT, 0);
+                // 1) Depth pre-pass
+                gl.disable(gl.BLEND);
+                gl.colorMask(false, false, false, false);
+                gl.depthMask(true);
+                gl.disable(gl.CULL_FACE); // write depth for both sides
+                gl.drawElements(gl.TRIANGLES, geo.indices.length, indexType, 0);
 
-            // Pass 2: draw front-facing triangles on top
-            gl.cullFace(gl.BACK);
-            gl.drawElements(gl.TRIANGLES, geo.indices.length, gl.UNSIGNED_SHORT, 0);
+                // 2-3) Color passes
+                gl.enable(gl.BLEND);
+                gl.colorMask(true, true, true, true);
+                gl.depthMask(false);
+                gl.enable(gl.CULL_FACE);
 
-            // Restore default depth write for any future draws
-            gl.depthMask(true);
+                // Pass 1: draw back-facing triangles (the far panels)
+                gl.cullFace(gl.FRONT);
+                gl.drawElements(gl.TRIANGLES, geo.indices.length, indexType, 0);
+
+                // Pass 2: draw front-facing triangles on top
+                gl.cullFace(gl.BACK);
+                gl.drawElements(gl.TRIANGLES, geo.indices.length, indexType, 0);
+
+                // Restore default
+                gl.depthMask(true);
+            } else {
+                // 2D mode: simple draw
+                gl.disable(gl.CULL_FACE);
+                gl.depthMask(false);
+                gl.drawElements(gl.TRIANGLES, geo.indices.length, indexType, 0);
+                gl.depthMask(true);
+            }
 
             if (vaoRef.current) gl.bindVertexArray(null);
 
@@ -418,64 +511,198 @@ export const SceneView: React.FC<SceneViewProps> = ({
 
         reqIdRef.current = requestAnimationFrame(render);
         return () => cancelAnimationFrame(reqIdRef.current);
-    }, [active, activeMesh, rotation, vertShader, fragShader, autoRotate, cameraDistance, textures]);
+    }, [active, activeMesh, vertShader, fragShader, autoRotate, cameraDistance, textures, mode]);
 
-    const handleMouseDown = (e: React.MouseEvent) => {
+    const clamp = (v: number, min: number, max: number) => Math.max(min, Math.min(max, v));
+
+    const handlePointerDown = (e: React.PointerEvent<HTMLCanvasElement>) => {
         if (autoRotate) return;
+        if (mode !== '3d') return;
+        if (e.button !== 0) return;
+        e.preventDefault();
+
         isDragging.current = true;
         lastMouse.current = { x: e.clientX, y: e.clientY };
+        try {
+            e.currentTarget.setPointerCapture(e.pointerId);
+        } catch {
+            // Safe to ignore if unsupported
+        }
     };
 
-    const handleMouseMove = (e: React.MouseEvent) => {
+    const handlePointerMove = (e: React.PointerEvent<HTMLCanvasElement>) => {
         if (!isDragging.current) return;
+        e.preventDefault();
+
         const dx = e.clientX - lastMouse.current.x;
         const dy = e.clientY - lastMouse.current.y;
         lastMouse.current = { x: e.clientX, y: e.clientY };
 
-        setRotation(prev => ({
-            x: prev.x + dx * 0.01,
-            y: prev.y + dy * 0.01
-        }));
+        const nextX = currentRotationRef.current.x + dx * 0.01;
+        const nextY = clamp(currentRotationRef.current.y + dy * 0.01, -1.55, 1.55);
+
+        // Keep yaw bounded to avoid precision drift.
+        const wrappedX = ((nextX + Math.PI) % (Math.PI * 2)) - Math.PI;
+
+        currentRotationRef.current = { x: wrappedX, y: nextY };
+
+        if (onRotationChange) {
+            if (pendingRotationRafRef.current === null) {
+                pendingRotationRafRef.current = requestAnimationFrame(() => {
+                    pendingRotationRafRef.current = null;
+                    onRotationChange(currentRotationRef.current);
+                });
+            }
+        }
     };
 
-    const handleMouseUp = () => {
+    const handlePointerUp = (e: React.PointerEvent<HTMLCanvasElement>) => {
         isDragging.current = false;
+        try {
+            e.currentTarget.releasePointerCapture(e.pointerId);
+        } catch {
+            // ignore
+        }
+
+        // Flush final rotation immediately.
+        if (pendingRotationRafRef.current !== null) {
+            cancelAnimationFrame(pendingRotationRafRef.current);
+            pendingRotationRafRef.current = null;
+        }
+        onRotationChange?.(currentRotationRef.current);
+    };
+
+    const computeBounds = (geo: GeometryData): { min: [number, number, number]; max: [number, number, number] } => {
+        const v = geo.vertices;
+        let minX = Infinity, minY = Infinity, minZ = Infinity;
+        let maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;
+
+        for (let i = 0; i < v.length; i += 3) {
+            const x = v[i + 0];
+            const y = v[i + 1];
+            const z = v[i + 2];
+            if (x < minX) minX = x;
+            if (y < minY) minY = y;
+            if (z < minZ) minZ = z;
+            if (x > maxX) maxX = x;
+            if (y > maxY) maxY = y;
+            if (z > maxZ) maxZ = z;
+        }
+
+        if (!Number.isFinite(minX)) return { min: [-1, -1, -1], max: [1, 1, 1] };
+        return { min: [minX, minY, minZ], max: [maxX, maxY, maxZ] };
+    };
+
+    const handleObjFileSelected = async (e: React.ChangeEvent<HTMLInputElement>) => {
+        try {
+            const file = e.target.files?.[0];
+            if (!file) return;
+            const text = await file.text();
+            const geo = parseOBJ(text);
+            const bounds = computeBounds(geo);
+            onObjModelChange?.({ geo, bounds });
+            onModeChange?.('3d');
+            onMeshChange?.('obj');
+            setLocalMesh('obj');
+        } catch (err) {
+            console.error('SceneView: failed to import OBJ', err);
+        } finally {
+            e.target.value = '';
+        }
     };
 
     return (
         <div className="w-full h-full relative group">
             <canvas
                 ref={canvasRef}
-                className={`w-full h-full block ${autoRotate ? 'cursor-default' : 'cursor-move'}`}
-                onMouseDown={handleMouseDown}
-                onMouseMove={handleMouseMove}
-                onMouseUp={handleMouseUp}
-                onMouseLeave={handleMouseUp}
+                className={`w-full h-full block touch-none ${autoRotate ? 'cursor-default' : 'cursor-move'}`}
+                onPointerDown={handlePointerDown}
+                onPointerMove={handlePointerMove}
+                onPointerUp={handlePointerUp}
+                onPointerCancel={handlePointerUp}
+            />
+
+            <input
+                ref={objFileInputRef}
+                type="file"
+                accept=".obj"
+                className="hidden"
+                onChange={handleObjFileSelected}
             />
 
             {showControls && (
                 <div className="absolute bottom-6 left-1/2 -translate-x-1/2 bg-gray-900/80 backdrop-blur-md border border-gray-700 rounded-full p-2 flex gap-2 shadow-2xl transition-opacity opacity-0 group-hover:opacity-100">
                     <button
-                        onClick={() => setLocalMesh('cube')}
+                        onClick={() => onModeChange?.('2d')}
+                        className={`px-2 py-1 rounded-full text-xs transition-colors ${mode === '2d' ? 'bg-blue-600 text-white' : 'text-gray-400 hover:text-white hover:bg-gray-700'}`}
+                        title="2D Mode"
+                    >
+                        2D
+                    </button>
+                    <button
+                        onClick={() => onModeChange?.('3d')}
+                        className={`px-2 py-1 rounded-full text-xs transition-colors ${mode === '3d' ? 'bg-blue-600 text-white' : 'text-gray-400 hover:text-white hover:bg-gray-700'}`}
+                        title="3D Mode"
+                    >
+                        3D
+                    </button>
+
+                    <div className="w-[1px] h-6 bg-gray-700 mx-1" />
+
+                    <button
+                        onClick={() => {
+                            onMeshChange?.('cube');
+                            if (!forcedMesh) setLocalMesh('cube');
+                        }}
                         className={`p-2 rounded-full transition-colors ${activeMesh === 'cube' ? 'bg-blue-600 text-white' : 'text-gray-400 hover:text-white hover:bg-gray-700'}`}
                         title="Cube"
                     >
                         <Box className="w-5 h-5" />
                     </button>
                     <button
-                        onClick={() => setLocalMesh('sphere')}
+                        onClick={() => {
+                            onMeshChange?.('sphere');
+                            if (!forcedMesh) setLocalMesh('sphere');
+                        }}
                         className={`p-2 rounded-full transition-colors ${activeMesh === 'sphere' ? 'bg-blue-600 text-white' : 'text-gray-400 hover:text-white hover:bg-gray-700'}`}
                         title="Sphere"
                     >
                         <Circle className="w-5 h-5" />
                     </button>
                     <button
-                        onClick={() => setLocalMesh('plane')}
+                        onClick={() => {
+                            onMeshChange?.('plane');
+                            if (!forcedMesh) setLocalMesh('plane');
+                        }}
                         className={`p-2 rounded-full transition-colors ${activeMesh === 'plane' ? 'bg-blue-600 text-white' : 'text-gray-400 hover:text-white hover:bg-gray-700'}`}
                         title="Plane"
                     >
                         <Square className="w-5 h-5" />
                     </button>
+
+                    <div className="w-[1px] h-6 bg-gray-700 mx-1" />
+
+                    <button
+                        onClick={() => {
+                            if (!objModel) return;
+                            onMeshChange?.('obj');
+                            if (!forcedMesh) setLocalMesh('obj');
+                        }}
+                        className={`p-2 rounded-full transition-colors ${activeMesh === 'obj' ? 'bg-blue-600 text-white' : objModel ? 'text-gray-400 hover:text-white hover:bg-gray-700' : 'text-gray-600'}`}
+                        title={objModel ? 'View Imported Model' : 'No imported model'}
+                    >
+                        <Layers className="w-5 h-5" />
+                    </button>
+
+                    {allowObjImport && (
+                        <button
+                            onClick={() => objFileInputRef.current?.click()}
+                            className="p-2 rounded-full transition-colors text-gray-400 hover:text-white hover:bg-gray-700"
+                            title="Import .obj"
+                        >
+                            <Upload className="w-5 h-5" />
+                        </button>
+                    )}
                 </div>
             )}
 

@@ -15,6 +15,7 @@ import { dispatchCommand } from './services/gemini/commands/dispatch';
 import { Wand2, Download, Upload, ZoomIn, ZoomOut, MousePointer2, Box, Square, Save, Layers, Network, CheckCircle2, Loader2, Sparkles, FileJson, AlertCircle, Plus, FilePlus, Circle, AppWindow, Code2 } from 'lucide-react';
 import { CodeEditor } from './components/CodeEditor';
 import { previewSystem } from './services/render/previewSystem';
+import type { GeometryData } from './services/render/objLoader';
 
 const App: React.FC = () => {
   const suppressManualHistoryRef = useRef(false);
@@ -94,7 +95,162 @@ const App: React.FC = () => {
 
   // Preview State (Mini preview in Graph)
   const [previewMode, setPreviewMode] = useState<'2d' | '3d'>('2d');
-  const [previewObject, setPreviewObject] = useState<'sphere' | 'cube' | 'plane'>('sphere');
+  const [previewObject, setPreviewObject] = useState<'sphere' | 'cube' | 'plane' | 'obj'>('sphere');
+
+  // Shared 3D rotation between Master Preview (Graph) and 3D Scene tab
+  const [shared3DRotation, setShared3DRotation] = useState<{ x: number; y: number }>({ x: 0.5, y: 0.5 });
+
+  // Shared imported OBJ model (single slot; overwritten on each import)
+  const [importedObj, setImportedObj] = useState<null | { geo: GeometryData; bounds: { min: [number, number, number]; max: [number, number, number] } }>(null);
+
+  // Save As dialog (export type + optional duration)
+  const [saveAsOpen, setSaveAsOpen] = useState(false);
+  const [saveAsFormat, setSaveAsFormat] = useState<'json' | 'png' | 'mp4'>('json');
+  const [saveAsSeconds, setSaveAsSeconds] = useState('4');
+  const [saveAsFps, setSaveAsFps] = useState<'24' | '30' | '60'>('30');
+  const [saveAsResolution, setSaveAsResolution] = useState<'auto' | '1280x720' | '1920x1080' | '2560x1440'>('auto');
+  const [saveAsBusy, setSaveAsBusy] = useState(false);
+  const [saveAsBusyLabel, setSaveAsBusyLabel] = useState('');
+
+  const [sceneRenderSizeOverride, setSceneRenderSizeOverride] = useState<{ width: number; height: number } | null>(null);
+
+  const sceneCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const fileNameRef = useRef<string>('shader-graph');
+
+  const waitFrames = useCallback(async (count: number) => {
+    for (let i = 0; i < count; i++) {
+      await new Promise<void>(resolve => requestAnimationFrame(() => resolve()));
+    }
+  }, []);
+
+  const downloadBlob = useCallback((blob: Blob, filename: string) => {
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    a.click();
+    URL.revokeObjectURL(url);
+  }, []);
+
+  const exportScenePng = useCallback(async () => {
+    // Ensure canvas has a non-zero size.
+    if (activeTab !== 'scene') {
+      setActiveTab('scene');
+      await waitFrames(2);
+    }
+
+    const canvas = sceneCanvasRef.current;
+    if (!canvas || canvas.width === 0 || canvas.height === 0) {
+      alert('3D Scene is not ready to export yet.');
+      return;
+    }
+
+    const blob: Blob | null = await new Promise(resolve => canvas.toBlob(resolve, 'image/png'));
+    if (!blob) {
+      alert('Failed to export PNG.');
+      return;
+    }
+    const base = fileNameRef.current || 'shader-graph';
+    return { blob, suggestedName: `${base}-scene.png` } as const;
+  }, [activeTab, waitFrames]);
+
+  const exportSceneVideo = useCallback(async (seconds: number, format: 'webm' | 'mp4', fps: number) => {
+    const durationMs = Math.max(0.1, Number(seconds) || 0) * 1000;
+    if (activeTab !== 'scene') {
+      setActiveTab('scene');
+      await waitFrames(2);
+    }
+
+    const canvas = sceneCanvasRef.current;
+    if (!canvas || canvas.width === 0 || canvas.height === 0) {
+      alert('3D Scene is not ready to export yet.');
+      return;
+    }
+
+    const safeFps = Math.max(1, Math.min(120, Math.floor(Number(fps) || 30)));
+    const stream = canvas.captureStream(safeFps);
+
+    const candidates = format === 'mp4'
+      ? ['video/mp4;codecs=avc1.42E01E', 'video/mp4']
+      : ['video/webm;codecs=vp9', 'video/webm;codecs=vp8', 'video/webm'];
+    const mimeType = candidates.find(t => (window as any).MediaRecorder?.isTypeSupported?.(t)) || '';
+
+    if (!(window as any).MediaRecorder) {
+      alert('Video export is not supported in this browser (MediaRecorder missing).');
+      return;
+    }
+
+    if (!mimeType) {
+      if (format === 'mp4') {
+        alert('MP4 export is not supported in this browser. Falling back to WebM.');
+        return exportSceneVideo(seconds, 'webm', fps);
+      }
+      alert('Video export is not supported in this browser (no supported codecs).');
+      return;
+    }
+
+    const chunks: BlobPart[] = [];
+    const recorder = new MediaRecorder(stream, { mimeType });
+    recorder.ondataavailable = (e) => {
+      if (e.data && e.data.size > 0) chunks.push(e.data);
+    };
+
+    let startedAt: number | null = null;
+    recorder.onstart = () => {
+      startedAt = performance.now();
+    };
+
+    const stopped = new Promise<void>(resolve => {
+      recorder.onstop = () => resolve();
+    });
+
+    recorder.start(250);
+
+    // Wait for the actual recording start so duration matches requested seconds.
+    const startWaitBegin = performance.now();
+    while (startedAt === null && performance.now() - startWaitBegin < 1000) {
+      await new Promise<void>(resolve => setTimeout(() => resolve(), 10));
+    }
+    const effectiveStart = startedAt ?? performance.now();
+    const targetEnd = effectiveStart + durationMs;
+    while (performance.now() < targetEnd) {
+      await new Promise<void>(resolve => requestAnimationFrame(() => resolve()));
+    }
+    try {
+      recorder.requestData();
+    } catch {
+      // Some browsers can throw if called at the wrong time; safe to ignore.
+    }
+    recorder.stop();
+    await stopped;
+
+    const blob = new Blob(chunks, { type: recorder.mimeType || mimeType });
+    const base = fileNameRef.current || 'shader-graph';
+    const ext = (recorder.mimeType || mimeType).includes('mp4') ? 'mp4' : 'webm';
+    return { blob, suggestedName: `${base}-scene.${ext}` } as const;
+  }, [activeTab, waitFrames]);
+
+  const saveBlobWithPicker = useCallback(async (
+    blob: Blob,
+    suggestedName: string,
+    types: Array<{ description: string; accept: Record<string, string[]> }>
+  ) => {
+    const supports = 'showSaveFilePicker' in window;
+    if (supports) {
+      try {
+        // @ts-ignore
+        const handle = await window.showSaveFilePicker({ suggestedName, types });
+        const writable = await handle.createWritable();
+        await writable.write(blob);
+        await writable.close();
+        return;
+      } catch (err) {
+        if ((err as Error).name === 'AbortError') return;
+        console.warn('Failed to save via file picker; falling back to download.', err);
+      }
+    }
+    downloadBlob(blob, suggestedName);
+  }, [downloadBlob]);
 
   // Interaction State
   const [isDraggingNodes, setIsDraggingNodes] = useState(false);
@@ -488,6 +644,10 @@ const App: React.FC = () => {
   const [fileName, setFileName] = useState<string>('shader-graph');
   const [isSaved, setIsSaved] = useState(true); // Track unsaved changes slightly (visual only)
   const [fileSystemError, setFileSystemError] = useState<boolean>(false); // Track if FSA API is blocked
+
+  useEffect(() => {
+    fileNameRef.current = fileName;
+  }, [fileName]);
 
   // Some browser extensions emit noisy unhandled rejections (chrome.runtime message channel closed).
   // In dev, this can look like an app failure; filter the known pattern only.
@@ -1064,6 +1224,78 @@ const App: React.FC = () => {
     setIsSaved(true);
   }, [nodes, connections, previewMode, fileHandle, fileName]);
 
+  const handleSaveAs = useCallback(() => {
+    setSaveAsOpen(true);
+  }, []);
+
+  const confirmSaveAs = useCallback(async () => {
+    const parseResolution = (value: string) => {
+      if (value === 'auto') return null;
+      const m = /^([0-9]+)x([0-9]+)$/.exec(value);
+      if (!m) return null;
+      const width = Math.max(1, Math.floor(Number(m[1]) || 0));
+      const height = Math.max(1, Math.floor(Number(m[2]) || 0));
+      if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) return null;
+      return { width, height };
+    };
+
+    if (saveAsBusy) return;
+    setSaveAsBusy(true);
+    setSaveAsBusyLabel('Preparing…');
+
+    const desiredSize = parseResolution(saveAsResolution);
+    if (desiredSize) {
+      setSaveAsBusyLabel(`Applying resolution ${desiredSize.width}x${desiredSize.height}…`);
+      setSceneRenderSizeOverride(desiredSize);
+      await waitFrames(3);
+    }
+
+    try {
+      if (saveAsFormat === 'json') {
+        setSaveAsBusyLabel('Saving JSON…');
+        setSaveAsOpen(false);
+        await saveGraph(true);
+        return;
+      }
+
+      if (saveAsFormat === 'png') {
+        setSaveAsBusyLabel('Rendering PNG…');
+        const result = await exportScenePng();
+        if (!result) return;
+        setSaveAsBusyLabel('Saving PNG…');
+        setSaveAsOpen(false);
+        await saveBlobWithPicker(result.blob, result.suggestedName, [
+          { description: 'PNG Image', accept: { 'image/png': ['.png'] } }
+        ]);
+        return;
+      }
+
+      const seconds = Math.max(0.1, Number(saveAsSeconds) || 0);
+      if (!Number.isFinite(seconds) || seconds <= 0) {
+        alert('Invalid seconds value.');
+        return;
+      }
+
+      const fpsNum = Number(saveAsFps) || 30;
+      setSaveAsBusyLabel('Recording video…');
+      const result = await exportSceneVideo(seconds, 'mp4', fpsNum);
+      if (!result) return;
+      setSaveAsBusyLabel('Finalizing video…');
+      setSaveAsOpen(false);
+      await saveBlobWithPicker(result.blob, result.suggestedName, [
+        { description: 'MP4 Video', accept: { 'video/mp4': ['.mp4'] } },
+        { description: 'WebM Video', accept: { 'video/webm': ['.webm'] } }
+      ]);
+    } finally {
+      if (desiredSize) {
+        setSceneRenderSizeOverride(null);
+        await waitFrames(2);
+      }
+      setSaveAsBusy(false);
+      setSaveAsBusyLabel('');
+    }
+  }, [exportScenePng, exportSceneVideo, saveAsBusy, saveAsFps, saveAsFormat, saveAsResolution, saveAsSeconds, saveBlobWithPicker, saveGraph, waitFrames]);
+
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       const isTextTarget = (el: HTMLElement | null | undefined) => {
@@ -1074,7 +1306,11 @@ const App: React.FC = () => {
 
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
         e.preventDefault();
-        saveGraph(e.shiftKey);
+        if (e.shiftKey) {
+          handleSaveAs();
+        } else {
+          saveGraph(false);
+        }
         return;
       }
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'o') {
@@ -1135,7 +1371,7 @@ const App: React.FC = () => {
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [selectedNodeIds, activeTab, nodes, connections, previewMode, fileHandle, fileName, saveGraph, handleOpen, copySelection, pasteSelection]);
+  }, [selectedNodeIds, activeTab, nodes, connections, previewMode, fileHandle, fileName, saveGraph, handleSaveAs, handleOpen, copySelection, pasteSelection]);
 
   const getGraphCoordinates = (clientX: number, clientY: number) => {
     if (!canvasRef.current) return { x: 0, y: 0 };
@@ -2349,11 +2585,153 @@ const App: React.FC = () => {
         <div className="flex items-center gap-2">
           <button onClick={handleNewGraph} className="bg-gray-800 hover:bg-gray-700 p-1.5 rounded text-gray-300 transition-colors" title="New Graph (Ctrl+Shift+N)"> <FilePlus className="w-4 h-4" /> </button>
           <button onClick={() => saveGraph(false)} className="bg-gray-800 hover:bg-gray-700 p-1.5 rounded text-gray-300 transition-colors" title="Save (Ctrl+S)"> <Save className="w-4 h-4" /> </button>
-          <button onClick={() => saveGraph(true)} className="bg-gray-800 hover:bg-gray-700 p-1.5 rounded text-gray-300 transition-colors" title="Save As... (Ctrl+Shift+S)"> <Download className="w-4 h-4" /> </button>
+          <button onClick={handleSaveAs} className="bg-gray-800 hover:bg-gray-700 p-1.5 rounded text-gray-300 transition-colors" title="Save As... (Ctrl+Shift+S)"> <Download className="w-4 h-4" /> </button>
           <button onClick={handleOpen} className="bg-gray-800 hover:bg-gray-700 p-1.5 rounded text-gray-300 cursor-pointer transition-colors" title="Open (Ctrl+O)"> <Upload className="w-4 h-4" /> </button>
           <input type="file" ref={fileInputRef} onChange={handleFallbackLoad} className="hidden" accept=".json" />
         </div>
       </div>
+
+      {saveAsOpen && (
+        <div
+          className="fixed inset-0 z-[200] bg-black/70 flex items-center justify-center"
+          onMouseDown={() => {
+            if (saveAsBusy) return;
+            setSaveAsOpen(false);
+          }}
+        >
+          <div
+            className="w-[380px] bg-[#1e1e1e] border border-gray-700 rounded-lg shadow-2xl p-4"
+            onMouseDown={(e) => e.stopPropagation()}
+          >
+            <div className="text-sm font-bold text-white mb-3">Save As</div>
+
+            <div className={saveAsBusy ? 'opacity-50 pointer-events-none' : ''}>
+              <div className="flex flex-col gap-2">
+              <label className="flex items-center gap-2 text-sm text-gray-200 cursor-pointer">
+                <input
+                  type="radio"
+                  name="saveAsFormat"
+                  checked={saveAsFormat === 'json'}
+                  onChange={() => setSaveAsFormat('json')}
+                  disabled={saveAsBusy}
+                />
+                JSON (.json)
+              </label>
+              <label className="flex items-center gap-2 text-sm text-gray-200 cursor-pointer">
+                <input
+                  type="radio"
+                  name="saveAsFormat"
+                  checked={saveAsFormat === 'png'}
+                  onChange={() => setSaveAsFormat('png')}
+                  disabled={saveAsBusy}
+                />
+                PNG (.png)
+              </label>
+              <label className="flex items-center gap-2 text-sm text-gray-200 cursor-pointer">
+                <input
+                  type="radio"
+                  name="saveAsFormat"
+                  checked={saveAsFormat === 'mp4'}
+                  onChange={() => setSaveAsFormat('mp4')}
+                  disabled={saveAsBusy}
+                />
+                MP4 (.mp4)
+              </label>
+              </div>
+
+            {saveAsFormat === 'mp4' && (
+              <>
+                <div className="mt-3 flex items-center gap-3">
+                  <div className="text-xs text-gray-300 w-16">Seconds</div>
+                  <input
+                    className="flex-1 bg-black border border-gray-600 rounded px-2 py-1 text-sm text-white outline-none focus:border-blue-500"
+                    value={saveAsSeconds}
+                    onChange={(e) => setSaveAsSeconds(e.target.value)}
+                    inputMode="decimal"
+                    placeholder="4"
+                    disabled={saveAsBusy}
+                  />
+                </div>
+
+                <div className="mt-2 flex items-center gap-3">
+                  <div className="text-xs text-gray-300 w-16">FPS</div>
+                  <select
+                    className="flex-1 bg-black border border-gray-600 rounded px-2 py-1 text-sm text-white outline-none focus:border-blue-500"
+                    value={saveAsFps}
+                    onChange={(e) => setSaveAsFps(e.target.value as any)}
+                    disabled={saveAsBusy}
+                  >
+                    <option value="24">24</option>
+                    <option value="30">30</option>
+                    <option value="60">60</option>
+                  </select>
+                </div>
+
+                <div className="mt-2 flex items-center gap-3">
+                  <div className="text-xs text-gray-300 w-16">Resolution</div>
+                  <select
+                    className="flex-1 bg-black border border-gray-600 rounded px-2 py-1 text-sm text-white outline-none focus:border-blue-500"
+                    value={saveAsResolution}
+                    onChange={(e) => setSaveAsResolution(e.target.value as any)}
+                    disabled={saveAsBusy}
+                  >
+                    <option value="auto">Auto (current)</option>
+                    <option value="1280x720">1280x720</option>
+                    <option value="1920x1080">1920x1080</option>
+                    <option value="2560x1440">2560x1440</option>
+                  </select>
+                </div>
+              </>
+            )}
+
+            {saveAsFormat === 'png' && (
+              <div className="mt-3 flex items-center gap-3">
+                <div className="text-xs text-gray-300 w-16">Resolution</div>
+                <select
+                  className="flex-1 bg-black border border-gray-600 rounded px-2 py-1 text-sm text-white outline-none focus:border-blue-500"
+                  value={saveAsResolution}
+                  onChange={(e) => setSaveAsResolution(e.target.value as any)}
+                  disabled={saveAsBusy}
+                >
+                  <option value="auto">Auto (current)</option>
+                  <option value="1280x720">1280x720</option>
+                  <option value="1920x1080">1920x1080</option>
+                  <option value="2560x1440">2560x1440</option>
+                </select>
+              </div>
+            )}
+
+            {saveAsBusy && (
+              <div className="mt-3 flex items-center gap-2 text-xs text-gray-300">
+                <Loader2 className="w-4 h-4 animate-spin" />
+                <span>{saveAsBusyLabel || 'Working…'}</span>
+              </div>
+            )}
+
+            </div>
+
+            <div className="mt-4 flex justify-end gap-2">
+              <button
+                className="bg-gray-800 hover:bg-gray-700 px-3 py-1.5 rounded text-gray-200 border border-gray-700 disabled:opacity-50 disabled:cursor-not-allowed"
+                onClick={() => {
+                  if (saveAsBusy) return;
+                  setSaveAsOpen(false);
+                }}
+                disabled={saveAsBusy}
+              >
+                Cancel
+              </button>
+              <button
+                className="bg-indigo-600 hover:bg-indigo-500 px-3 py-1.5 rounded text-white disabled:opacity-50 disabled:cursor-not-allowed"
+                onClick={confirmSaveAs}
+                disabled={saveAsBusy}
+              >
+                Save
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       <div className="flex-1 relative overflow-hidden flex">
         {/* New Sidebar */}
@@ -2391,6 +2769,16 @@ const App: React.FC = () => {
                       <button onClick={() => setPreviewObject('sphere')} className={`p-1 rounded hover:bg-gray-600 ${previewObject === 'sphere' ? 'text-blue-400' : 'text-gray-400'}`} title="Sphere"> <Circle className="w-3 h-3" /> </button>
                       <button onClick={() => setPreviewObject('cube')} className={`p-1 rounded hover:bg-gray-600 ${previewObject === 'cube' ? 'text-blue-400' : 'text-gray-400'}`} title="Cube"> <Box className="w-3 h-3" /> </button>
                       <button onClick={() => setPreviewObject('plane')} className={`p-1 rounded hover:bg-gray-600 ${previewObject === 'plane' ? 'text-blue-400' : 'text-gray-400'}`} title="Plane"> <Square className="w-3 h-3" /> </button>
+                      <button
+                        onClick={() => {
+                          if (!importedObj) return;
+                          setPreviewObject('obj');
+                        }}
+                        className={`p-1 rounded hover:bg-gray-600 ${previewObject === 'obj' ? 'text-blue-400' : importedObj ? 'text-gray-400' : 'text-gray-600'}`}
+                        title={importedObj ? 'Imported Model' : 'No imported model'}
+                      >
+                        <Layers className="w-3 h-3" />
+                      </button>
                     </>
                   )}
                 </div>
@@ -2400,17 +2788,16 @@ const App: React.FC = () => {
                   active={activeTab === 'graph'}
                   fragShader={fragShader}
                   vertShader={vertShader}
-                  forcedMesh={previewMode === '2d' ? 'plane' : previewObject}
+                  forcedMesh={previewMode === '2d' ? 'plane' : (previewObject === 'obj' && !importedObj ? 'sphere' : previewObject)}
                   textures={textureUniforms}
                   showControls={false}
                   autoRotate={false}
                   mode={previewMode}
-                  cameraDistance={
-                    previewMode === '2d' ? 2.5 :
-                      previewObject === 'cube' ? 4.5 :
-                        previewObject === 'plane' ? 3.2 :
-                          3.2
-                  }
+                  rotation={shared3DRotation}
+                  onRotationChange={setShared3DRotation}
+                  objModel={importedObj?.geo || null}
+                  objBounds={importedObj?.bounds || null}
+                  cameraDistance={previewMode === '2d' ? 2.5 : (previewObject === 'plane' ? 3.2 : 4.5)}
                 />
               </div>
             </div>
@@ -2505,7 +2892,25 @@ const App: React.FC = () => {
           </div>
         </div>
         <div className={`flex-1 h-full relative bg-[#0a0a0a] ${activeTab === 'scene' ? 'z-10 flex' : 'z-0 hidden'}`}>
-          <SceneView fragShader={fragShader} vertShader={vertShader} active={activeTab === 'scene'} textures={textureUniforms} />
+          <SceneView
+            fragShader={fragShader}
+            vertShader={vertShader}
+            active={activeTab === 'scene'}
+            textures={textureUniforms}
+            rotation={shared3DRotation}
+            onRotationChange={setShared3DRotation}
+            mode={previewMode}
+            onModeChange={setPreviewMode}
+            forcedMesh={previewMode === '2d' ? 'plane' : (previewObject === 'obj' && !importedObj ? 'sphere' : previewObject)}
+            onMeshChange={(mesh) => setPreviewObject(mesh)}
+            objModel={importedObj?.geo || null}
+            objBounds={importedObj?.bounds || null}
+            allowObjImport={true}
+            onObjModelChange={setImportedObj}
+            cameraDistance={previewMode === '2d' ? 2.5 : (previewObject === 'plane' ? 3.2 : 4.5)}
+            renderSizeOverride={sceneRenderSizeOverride}
+            onCanvasReady={(c) => { sceneCanvasRef.current = c; }}
+          />
         </div>
         <div className={`flex-1 h-full relative bg-[#0a0a0a] flex ${activeTab === 'code' ? 'z-10 flex' : 'z-0 hidden'}`}>
           <CodeEditor
