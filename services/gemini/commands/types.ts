@@ -24,7 +24,7 @@ export type CommandContext = {
     log?: (msg: string) => void;
   }) => void;
 
-  runGeminiPipeline: (prompt: string, attachment?: string, selectedAssetId?: string) => Promise<void>;
+  runGeminiPipeline: (prompt: string, attachment?: string | string[], selectedAssetId?: string) => Promise<void>;
   onAssistantResponse?: (text: string) => void;
 };
 

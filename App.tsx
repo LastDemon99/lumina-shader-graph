@@ -1890,12 +1890,13 @@ const App: React.FC = () => {
 
   const runGeminiPipeline = async (
     prompt: string,
-    attachment?: string,
+    attachment?: string | string[],
     selectedAssetId?: string,
     previewRequestRound: number = 0,
     uploadFollowupRound: number = 0
   ) => {
-    if (!prompt && !attachment) return;
+    const attachmentList = Array.isArray(attachment) ? attachment.filter(Boolean) : (attachment ? [attachment] : []);
+    if (!prompt && attachmentList.length === 0) return;
 
     const parseInlineData = (dataUrl: string): { mime_type: string; data: string } | null => {
       const match = String(dataUrl || '').match(/^data:([^;]+);base64,(.*)$/);
@@ -2052,16 +2053,18 @@ const App: React.FC = () => {
     const userParts: AgentMessagePart[] = [];
     if (finalPrompt.trim()) userParts.push({ text: finalPrompt });
 
-    if (attachment) {
-      const s = String(attachment);
-      const inline = parseInlineData(s);
-      if (inline) {
-        userParts.push({ inline_data: inline });
-      } else if (/^https?:\/\//i.test(s)) {
-        // userParts.push({ image_url: s });
-        userParts.push({ text: `ATTACHMENT_URL:\n${s}` });
-      } else {
-        userParts.push({ text: `ATTACHMENT:\n${s}` });
+    if (attachmentList.length) {
+      for (const a of attachmentList) {
+        const s = String(a);
+        const inline = parseInlineData(s);
+        if (inline) {
+          userParts.push({ inline_data: inline });
+        } else if (/^https?:\/\//i.test(s)) {
+          // userParts.push({ image_url: s });
+          userParts.push({ text: `ATTACHMENT_URL:\n${s}` });
+        } else {
+          userParts.push({ text: `ATTACHMENT:\n${s}` });
+        }
       }
     }
 
@@ -2440,8 +2443,8 @@ const App: React.FC = () => {
       // automatically re-call once using selectedAssetId (so the agent can reference it without re-uploading).
       const uploadOnly = ops.length === 1 && ops[0]?.op === 'upload_asset';
       const uploadedId = uploadOnly ? String((ops[0] as any)?.assetId || '') : '';
-      const isImageAttachment = typeof attachment === 'string' && String(attachment).startsWith('data:image/');
-      const shouldFollow = uploadOnly && isImageAttachment && !selectedAssetId && uploadFollowupRound < 1 && shouldAutoFollowupAfterUpload(prompt);
+      const isSingleImageAttachment = attachmentList.length === 1 && String(attachmentList[0]).startsWith('data:image/');
+      const shouldFollow = uploadOnly && isSingleImageAttachment && !selectedAssetId && uploadFollowupRound < 1 && shouldAutoFollowupAfterUpload(prompt);
 
       if (shouldFollow && uploadedId) {
         setLinterLogs(prev => [...prev, `Auto-followup: uploaded asset ${uploadedId}; continuing request...`]);
@@ -2459,12 +2462,13 @@ const App: React.FC = () => {
 
   const handleGeminiGenerate = async (
     prompt: string,
-    attachment?: string,
+    attachments?: string[],
     chatContext?: Array<{ role: 'user' | 'assistant' | 'system'; content: string }>
     ,
     selectedAssetId?: string
   ) => {
-    if (!prompt && !attachment) return;
+    const attachmentList = Array.isArray(attachments) ? attachments.filter(Boolean) : [];
+    if (!prompt && attachmentList.length === 0) return;
 
     chatContextRef.current = Array.isArray(chatContext) ? chatContext : null;
 
@@ -2476,7 +2480,7 @@ const App: React.FC = () => {
     setLastAiMeta(null);
 
     const handled = await dispatchCommand(
-      { prompt: effectivePrompt, attachment, chatContext, selectedAssetId, focusText: focusText || undefined },
+      { prompt: effectivePrompt, attachment: attachmentList[0], chatContext, selectedAssetId, focusText: focusText || undefined },
       {
         nodes,
         connections,
@@ -2498,7 +2502,8 @@ const App: React.FC = () => {
 
     if (handled) return;
 
-    await runGeminiPipeline(effectivePrompt, attachment, selectedAssetId);
+    // Pass through multiple attachments to the backend agent.
+    await runGeminiPipeline(effectivePrompt, attachmentList.length ? attachmentList : undefined, selectedAssetId);
   };
 
   const renderConnections = () => {

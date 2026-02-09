@@ -8,7 +8,8 @@ interface Message {
     id: string;
     role: 'user' | 'assistant' | 'system';
     content: string;
-    attachment?: string; // Base64
+    attachment?: string; // Base64 (legacy: single attachment)
+    attachments?: string[]; // Base64 data URLs (preferred)
     attachedNodes?: Array<{ id: string; label: string; type: string }>;
     debug?: {
         thoughts: string[];
@@ -59,7 +60,7 @@ const ASSISTANT_COMMANDS = [
 interface GeminiAssistantSidebarProps {
     onGenerate: (
         prompt: string,
-        attachment?: string,
+        attachments?: string[],
         chatContext?: Array<{ role: 'user' | 'assistant' | 'system'; content: string }>,
         selectedAssetId?: string
     ) => void;
@@ -176,7 +177,7 @@ export const GeminiAssistantSidebar: React.FC<GeminiAssistantSidebarProps> = ({
         prevPhaseRef.current = generationPhase;
     }, [generationPhase, logs]);
 
-    const [attachment, setAttachment] = useState<string | null>(null);
+    const [attachments, setAttachments] = useState<string[]>([]);
     const [selectedAssetId, setSelectedAssetId] = useState<string | null>(null);
     const messagesEndRef = useRef<HTMLDivElement>(null);
     const fileInputRef = useRef<HTMLInputElement>(null);
@@ -226,7 +227,7 @@ export const GeminiAssistantSidebar: React.FC<GeminiAssistantSidebarProps> = ({
                 const reader = new FileReader();
                 reader.onloadend = () => {
                     const base64data = reader.result as string;
-                    setAttachment(base64data);
+                    setAttachments([base64data]);
                 };
                 reader.readAsDataURL(audioBlob);
                 stream.getTracks().forEach(track => track.stop());
@@ -249,7 +250,8 @@ export const GeminiAssistantSidebar: React.FC<GeminiAssistantSidebarProps> = ({
 
     const handleSend = () => {
         let finalPrompt = prompt;
-        let finalAttachment = attachment;
+        const finalAttachments = attachments.slice();
+        const primaryAttachment = finalAttachments[0] ?? null;
 
         // Auto-detect YouTube URLs in prompt if no attachment is present
         // (Disabled temporarily as requested)
@@ -272,19 +274,19 @@ export const GeminiAssistantSidebar: React.FC<GeminiAssistantSidebarProps> = ({
                     content: 'History cleared. How can I help you now?'
                 }
             ]);
-            setAttachment(null);
+            setAttachments([]);
             onClearAttachedNodes?.();
             setPrompt('');
             return;
         }
 
         const trimmedPrompt = finalPrompt.trim().toLowerCase();
-        if (trimmedPrompt.startsWith('/loadimage') && !finalAttachment) {
+        if (trimmedPrompt.startsWith('/loadimage') && !primaryAttachment) {
             fileInputRef.current?.click();
             return;
         }
 
-        if ((!finalPrompt.trim() && !finalAttachment) || generationPhase !== 'idle') return;
+        if ((!finalPrompt.trim() && !primaryAttachment) || generationPhase !== 'idle') return;
 
         const attachedSnapshot = (attachedNodes && attachedNodes.length)
             ? attachedNodes.map(n => ({ id: n.id, label: n.label, type: n.type }))
@@ -294,7 +296,8 @@ export const GeminiAssistantSidebar: React.FC<GeminiAssistantSidebarProps> = ({
             id: Date.now().toString(),
             role: 'user',
             content: finalPrompt,
-            attachment: finalAttachment || undefined,
+            attachment: primaryAttachment || undefined,
+            attachments: finalAttachments.length ? finalAttachments : undefined,
             attachedNodes: attachedSnapshot,
         };
 
@@ -304,10 +307,10 @@ export const GeminiAssistantSidebar: React.FC<GeminiAssistantSidebarProps> = ({
             .slice(-12)
             .map(m => ({ role: m.role, content: m.content }));
 
-        onGenerate(finalPrompt, finalAttachment || undefined, chatContext, selectedAssetId || undefined);
+        onGenerate(finalPrompt, finalAttachments.length ? finalAttachments : undefined, chatContext, selectedAssetId || undefined);
 
         setPrompt('');
-        setAttachment(null);
+        setAttachments([]);
         setSelectedAssetId(null);
     };
 
@@ -342,23 +345,36 @@ export const GeminiAssistantSidebar: React.FC<GeminiAssistantSidebarProps> = ({
         }
     };
 
-    const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-        const file = e.target.files?.[0];
-        if (file) {
+    const readFileAsDataUrl = (file: File): Promise<string> => {
+        return new Promise((resolve, reject) => {
             const reader = new FileReader();
-            reader.onload = (evt) => {
-                if (typeof evt.target?.result === 'string') {
-                    setAttachment(evt.target.result);
-                }
+            reader.onerror = () => reject(new Error('Failed to read file'));
+            reader.onload = () => {
+                if (typeof reader.result === 'string') resolve(reader.result);
+                else reject(new Error('Unexpected file read result'));
             };
             reader.readAsDataURL(file);
+        });
+    };
+
+    const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+        const files = Array.from(e.target.files ?? []);
+        // Allow selecting the same file again.
+        e.target.value = '';
+
+        if (!files.length) return;
+        try {
+            const urls = await Promise.all(files.map(readFileAsDataUrl));
+            setAttachments(urls);
+        } catch (err) {
+            console.error(err);
         }
     };
 
     const [isDragging, setIsDragging] = useState(false);
 
     const primeChatWithAssetCommand = (asset: SessionAsset, commandPrefix: string) => {
-        setAttachment(asset.dataUrl);
+        setAttachments([asset.dataUrl]);
         setPrompt(commandPrefix);
         setSelectedAssetId(asset.id);
         setCollapsed(false);
@@ -377,7 +393,7 @@ export const GeminiAssistantSidebar: React.FC<GeminiAssistantSidebarProps> = ({
 
     const handleDeleteAsset = async (asset: SessionAsset) => {
         if (selectedAssetId === asset.id) setSelectedAssetId(null);
-        if (attachment === asset.dataUrl) setAttachment(null);
+        if (attachments.length === 1 && attachments[0] === asset.dataUrl) setAttachments([]);
         await onDeleteAsset(asset.id);
     };
 
@@ -395,26 +411,25 @@ export const GeminiAssistantSidebar: React.FC<GeminiAssistantSidebarProps> = ({
         e.preventDefault();
         setIsDragging(false);
 
-        const file = e.dataTransfer.files?.[0];
-        if (file && (file.type.startsWith('image/') || file.type.startsWith('video/') || file.type.startsWith('audio/'))) {
-            const reader = new FileReader();
-            reader.onload = (evt) => {
-                if (typeof evt.target?.result === 'string') {
-                    setAttachment(evt.target.result);
-                }
-            };
-            reader.readAsDataURL(file);
-        }
+        const files = Array.from(e.dataTransfer.files ?? []).filter(f =>
+            f.type.startsWith('image/') || f.type.startsWith('video/') || f.type.startsWith('audio/')
+        );
+        if (!files.length) return;
+
+        Promise.all(files.map(readFileAsDataUrl))
+            .then(urls => setAttachments(urls))
+            .catch(err => console.error(err));
     };
 
     const addCurrentAttachmentAsAsset = () => {
-        if (!attachment) return;
-        if (!attachment.startsWith('data:image/')) {
+        const primary = attachments[0];
+        if (!primary) return;
+        if (!primary.startsWith('data:image/')) {
             alert('Only image attachments can be saved as texture assets.');
             return;
         }
-        onAddAsset(attachment);
-        setAttachment(null);
+        onAddAsset(primary);
+        setAttachments([]);
         setCollapsed(false);
         setActivePanel('assets');
     };
@@ -502,7 +517,7 @@ export const GeminiAssistantSidebar: React.FC<GeminiAssistantSidebarProps> = ({
                                 />
                             </label>
 
-                            {attachment?.startsWith('data:image/') && (
+                            {attachments[0]?.startsWith('data:image/') && (
                                 <button
                                     onClick={addCurrentAttachmentAsAsset}
                                     className="text-xs px-2 py-1 rounded border border-indigo-700 bg-indigo-700/20 text-indigo-200 hover:bg-indigo-700/30"
@@ -581,32 +596,51 @@ export const GeminiAssistantSidebar: React.FC<GeminiAssistantSidebarProps> = ({
                                             </span>
                                         </div>
                                     )}
-                                    {msg.attachment && (
+                                    {(() => {
+                                        const list = (msg.attachments && msg.attachments.length)
+                                            ? msg.attachments
+                                            : (msg.attachment ? [msg.attachment] : []);
+                                        if (!list.length) return null;
+
+                                        // Render up to 3 previews; keep it compact.
+                                        const cap = list.slice(0, 3);
+                                        const extra = list.length - cap.length;
+                                        return (
                                         <div className="mb-2 relative rounded overflow-hidden border border-white/20 bg-black/40 p-1">
-                                            {msg.attachment.startsWith('data:image/') ? (
-                                                <img src={msg.attachment} alt="Attachment" className="max-w-full h-auto max-h-32 object-cover" />
-                                            ) : msg.attachment.startsWith('data:video/') ? (
-                                                <video src={msg.attachment} controls className="max-w-full h-auto max-h-32" />
-                                            ) : msg.attachment.startsWith('data:audio/') ? (
-                                                <audio src={msg.attachment} controls className="w-full h-8" />
-                                            ) : msg.attachment.includes('/api/v1/assets/') ? (
-                                                <div className="flex items-center gap-2 p-2 overflow-hidden bg-blue-900/20">
-                                                    <ImageIcon className="w-4 h-4 text-blue-400 shrink-0" />
-                                                    <span className="truncate text-[10px] text-gray-300 font-mono">{msg.attachment}</span>
-                                                </div>
-                                            ) : msg.attachment.startsWith('http') ? (
-                                                <div className="flex items-center gap-2 p-2 overflow-hidden bg-red-900/20">
-                                                    <Play className="w-4 h-4 text-red-500 shrink-0" />
-                                                    <span className="truncate text-[10px] text-gray-300 font-mono">{msg.attachment}</span>
-                                                </div>
-                                            ) : (
-                                                <div className="flex items-center gap-2 p-2 overflow-hidden">
-                                                    <Paperclip className="w-4 h-4 text-indigo-400 shrink-0" />
-                                                    <span className="truncate text-[10px] text-gray-400">{msg.attachment.split(';')[0]}</span>
-                                                </div>
+                                            <div className="flex gap-2">
+                                                {cap.map((a, idx) => (
+                                                    <div key={idx} className="relative rounded overflow-hidden border border-white/10 bg-black/30">
+                                                        {a.startsWith('data:image/') ? (
+                                                            <img src={a} alt="Attachment" className="h-20 w-20 object-cover" />
+                                                        ) : a.startsWith('data:video/') ? (
+                                                            <video src={a} controls className="h-20 w-20 object-cover" />
+                                                        ) : a.startsWith('data:audio/') ? (
+                                                            <audio src={a} controls className="w-48 h-8" />
+                                                        ) : a.includes('/api/v1/assets/') ? (
+                                                            <div className="flex items-center gap-2 p-2 overflow-hidden bg-blue-900/20">
+                                                                <ImageIcon className="w-4 h-4 text-blue-400 shrink-0" />
+                                                                <span className="truncate text-[10px] text-gray-300 font-mono">{a}</span>
+                                                            </div>
+                                                        ) : a.startsWith('http') ? (
+                                                            <div className="flex items-center gap-2 p-2 overflow-hidden bg-red-900/20">
+                                                                <Play className="w-4 h-4 text-red-500 shrink-0" />
+                                                                <span className="truncate text-[10px] text-gray-300 font-mono">{a}</span>
+                                                            </div>
+                                                        ) : (
+                                                            <div className="flex items-center gap-2 p-2 overflow-hidden">
+                                                                <Paperclip className="w-4 h-4 text-indigo-400 shrink-0" />
+                                                                <span className="truncate text-[10px] text-gray-400">{a.split(';')[0]}</span>
+                                                            </div>
+                                                        )}
+                                                    </div>
+                                                ))}
+                                            </div>
+                                            {extra > 0 && (
+                                                <div className="mt-1 text-[10px] text-gray-300 opacity-80">+{extra} more</div>
                                             )}
                                         </div>
-                                    )}
+                                        );
+                                    })()}
                                     <div className="markdown-body text-xs md:text-sm">
                                         <ReactMarkdown
                                             remarkPlugins={[remarkGfm]}
@@ -774,28 +808,40 @@ export const GeminiAssistantSidebar: React.FC<GeminiAssistantSidebarProps> = ({
                                 </div>
                             )}
 
-                            {attachment && (
+                            {attachments.length > 0 && (
                                 <div className="p-2 border-b border-gray-700 flex items-center gap-2">
-                                    {attachment.startsWith('data:image/') ? (
+                                    {(() => {
+                                        const primary = attachments[0];
+                                        if (!primary) return <Paperclip className="w-4 h-4 text-blue-300" />;
+                                        return primary.startsWith('data:image/') ? (
                                         <ImageIcon className="w-4 h-4 text-indigo-300" />
-                                    ) : attachment.startsWith('data:video/') ? (
+                                        ) : primary.startsWith('data:video/') ? (
                                         <Play className="w-4 h-4 text-pink-400" />
-                                    ) : attachment.startsWith('data:audio/') ? (
+                                        ) : primary.startsWith('data:audio/') ? (
                                         <Mic className="w-4 h-4 text-emerald-400" />
-                                    ) : attachment.includes('/api/v1/assets/') ? (
+                                        ) : primary.includes('/api/v1/assets/') ? (
                                         <ImageIcon className="w-4 h-4 text-blue-400" />
-                                    ) : attachment.startsWith('http') ? (
+                                        ) : primary.startsWith('http') ? (
                                         <Play className="w-4 h-4 text-red-500" />
-                                    ) : (
+                                        ) : (
                                         <Paperclip className="w-4 h-4 text-blue-300" />
-                                    )}
+                                        );
+                                    })()}
                                     <span className="text-xs text-gray-200 truncate flex-1">
-                                        {attachment.startsWith('data:audio/') ? 'Voice recording attached' :
-                                            attachment.includes('/api/v1/assets/') ? 'Library asset attached' :
-                                                attachment.startsWith('http') ? 'External link attached' : 'File attached'}
+                                        {(() => {
+                                            const primary = attachments[0] || '';
+                                            const label = primary.startsWith('data:audio/')
+                                                ? 'Voice recording attached'
+                                                : primary.includes('/api/v1/assets/')
+                                                    ? 'Library asset attached'
+                                                    : primary.startsWith('http')
+                                                        ? 'External link attached'
+                                                        : 'File attached';
+                                            return attachments.length > 1 ? `${label} (+${attachments.length - 1})` : label;
+                                        })()}
                                     </span>
                                     <button
-                                        onClick={() => { setAttachment(null); setSelectedAssetId(null); }}
+                                        onClick={() => { setAttachments([]); setSelectedAssetId(null); }}
                                         className="p-1 rounded hover:bg-white/10"
                                         title="Remove attachment"
                                         disabled={generationPhase !== 'idle'}
@@ -868,6 +914,7 @@ export const GeminiAssistantSidebar: React.FC<GeminiAssistantSidebarProps> = ({
                                 onChange={handleFileChange}
                                 className="hidden"
                                 accept="image/*,video/*,audio/*"
+                                multiple
                             />
 
                             <button
@@ -893,8 +940,8 @@ export const GeminiAssistantSidebar: React.FC<GeminiAssistantSidebarProps> = ({
 
                             <button
                                 onClick={handleSend}
-                                disabled={(!prompt.trim() && !attachment) || generationPhase !== 'idle'}
-                                className={`absolute bottom-2 right-2 p-2 rounded-lg transition-all ${((prompt.trim() || attachment) && generationPhase === 'idle')
+                                disabled={(!prompt.trim() && attachments.length === 0) || generationPhase !== 'idle'}
+                                className={`absolute bottom-2 right-2 p-2 rounded-lg transition-all ${((prompt.trim() || attachments.length > 0) && generationPhase === 'idle')
                                     ? 'bg-indigo-600 text-white hover:bg-indigo-500 shadow-lg'
                                     : 'bg-gray-800 text-gray-500 cursor-not-allowed'
                                     }`}
